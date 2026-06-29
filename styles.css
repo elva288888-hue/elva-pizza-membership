@@ -1,0 +1,698 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f4ee;
+  --surface: #fffaf3;
+  --surface-strong: #ffffff;
+  --ink: #25312d;
+  --muted: #6f7a75;
+  --line: #e3d8c9;
+  --accent: #0f8a6b;
+  --accent-dark: #096b53;
+  --warm: #d7823a;
+  --danger: #b93f3f;
+  --shadow: 0 18px 50px rgba(62, 52, 39, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 28px 20px;
+  background: #24342f;
+  color: #fffaf3;
+}
+
+.brand {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.brand-logo {
+  width: 54px;
+  height: 54px;
+  border-radius: 8px;
+  background: #fffaf3;
+  object-fit: cover;
+}
+
+.brand h1,
+.brand p,
+.topbar h2,
+.eyebrow,
+.panel h3 {
+  margin: 0;
+}
+
+.brand h1 {
+  font-size: 20px;
+}
+
+.brand p {
+  margin-top: 4px;
+  color: #cfd8d3;
+}
+
+.nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-item,
+.ghost-button,
+.text-button,
+.primary-button,
+.icon-button,
+.import-label {
+  border: 0;
+  border-radius: 8px;
+  min-height: 42px;
+}
+
+.nav-item {
+  padding: 12px 14px;
+  color: #e9eee9;
+  text-align: left;
+  background: transparent;
+}
+
+.nav-item.active {
+  color: #24342f;
+  background: #fff4df;
+  font-weight: 700;
+}
+
+.sidebar-footer {
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.import-label {
+  display: grid;
+  place-items: center;
+  padding: 0 12px;
+  color: #fffaf3;
+  border: 1px solid rgba(255, 250, 243, 0.24);
+}
+
+.import-label input {
+  display: none;
+}
+
+.main {
+  padding: 30px;
+  overflow: hidden;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: var(--warm);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.topbar h2 {
+  font-size: 34px;
+}
+
+.view {
+  display: none;
+}
+
+.active-view {
+  display: block;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.metric-card,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.metric-card {
+  padding: 20px;
+}
+
+.metric-card span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 12px;
+  font-size: 30px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 18px;
+}
+
+.panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.panel-head,
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-head {
+  margin-bottom: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+textarea {
+  resize: vertical;
+}
+
+.span-2 {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.primary-button {
+  padding: 0 16px;
+  color: white;
+  background: var(--accent);
+  font-weight: 700;
+}
+
+.primary-button:hover {
+  background: var(--accent-dark);
+}
+
+.ghost-button {
+  padding: 0 14px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+.text-button {
+  min-height: 32px;
+  padding: 0 4px;
+  color: var(--accent);
+  background: transparent;
+  font-weight: 700;
+}
+
+.toolbar {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.search-input {
+  max-width: 420px;
+}
+
+.filter-select {
+  max-width: 160px;
+}
+
+.date-filter {
+  min-width: 160px;
+}
+
+.member-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.member-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.member-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.member-card h3 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.member-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.balance {
+  color: var(--accent-dark);
+  font-size: 24px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.card-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.mini-button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.danger-button {
+  color: var(--danger);
+}
+
+.record-list {
+  display: grid;
+  gap: 10px;
+}
+
+.record-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.record-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.record-item span,
+.record-item p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.record-item p {
+  margin: 5px 0 0;
+}
+
+.record-amount {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.record-amount.recharge {
+  color: var(--accent-dark);
+}
+
+.record-amount.spend {
+  color: var(--danger);
+}
+
+.record-amount.adjust {
+  color: var(--warm);
+}
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+th {
+  color: var(--muted);
+  font-size: 13px;
+  background: var(--surface);
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+.empty-state {
+  padding: 26px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 243, 0.7);
+}
+
+.settings-panel {
+  max-width: 760px;
+}
+
+.rule-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.rule-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.dialog {
+  width: min(520px, calc(100vw - 32px));
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28);
+}
+
+.dialog::backdrop {
+  background: rgba(28, 35, 32, 0.45);
+}
+
+.dialog form {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  background: var(--surface-strong);
+}
+
+.dialog-head,
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-head h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.icon-button {
+  width: 36px;
+  min-height: 36px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.receipt-print {
+  display: none;
+}
+
+.receipt {
+  width: 72mm;
+  padding: 6mm 4mm;
+  color: #111;
+  background: #fff;
+  font-family: "Courier New", "PingFang SC", monospace;
+  font-size: 12px;
+}
+
+.receipt-logo {
+  display: block;
+  width: 28mm;
+  height: 28mm;
+  margin: 0 auto 4px;
+  object-fit: cover;
+}
+
+.receipt h2 {
+  margin: 0 0 4px;
+  text-align: center;
+  font-size: 19px;
+}
+
+.receipt-subtitle,
+.receipt-footer {
+  margin: 0;
+  text-align: center;
+}
+
+.receipt-dashed {
+  margin: 10px 0;
+  border-top: 1px dashed #222;
+}
+
+.receipt-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 7px 0;
+}
+
+.receipt-line span {
+  color: #444;
+}
+
+.receipt-line strong {
+  text-align: right;
+  word-break: break-word;
+}
+
+.receipt-records {
+  display: grid;
+  gap: 8px;
+}
+
+.receipt-record {
+  display: grid;
+  gap: 3px;
+}
+
+.receipt-record div,
+.receipt-record span {
+  display: grid;
+  gap: 2px;
+}
+
+.receipt-record strong {
+  font-size: 11px;
+}
+
+.receipt-record span,
+.receipt-record p {
+  margin: 0;
+  color: #222;
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 18px;
+  }
+
+  .nav {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .nav-item {
+    text-align: center;
+  }
+
+  .sidebar-footer {
+    grid-template-columns: repeat(2, 1fr);
+    margin-top: 0;
+  }
+
+  .main {
+    padding: 22px 16px;
+  }
+
+  .metric-grid,
+  .content-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .brand-logo {
+    width: 46px;
+    height: 46px;
+  }
+
+  .topbar,
+  .toolbar,
+  .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topbar h2 {
+    font-size: 28px;
+  }
+
+  .metric-grid,
+  .content-grid,
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: auto;
+  }
+
+  .search-input,
+  .filter-select,
+  .date-filter {
+    max-width: none;
+  }
+
+  .card-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+}
+
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 0;
+  }
+
+  body {
+    min-height: auto;
+    background: #fff;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .receipt-print,
+  .receipt-print * {
+    visibility: visible;
+  }
+
+  .receipt-print {
+    position: absolute;
+    inset: 0 auto auto 0;
+    display: block;
+    width: 80mm;
+    margin: 0;
+    padding: 0;
+  }
+
+  .receipt {
+    box-shadow: none;
+  }
+}
