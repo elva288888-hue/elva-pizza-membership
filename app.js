@@ -1,6 +1,10 @@
 const STORAGE_KEY = "aiwa_drink_membership_v1";
+const OTP_TEST_CODE = "123456";
 
 const state = {
+  stores: [],
+  staff: [],
+  session: null,
   members: [],
   records: [],
   settings: {
@@ -10,6 +14,16 @@ const state = {
 };
 
 const els = {
+  loginScreen: document.querySelector("#loginScreen"),
+  appShell: document.querySelector("#appShell"),
+  loginForm: document.querySelector("#loginForm"),
+  loginPhone: document.querySelector("#loginPhone"),
+  loginCode: document.querySelector("#loginCode"),
+  sendCode: document.querySelector("#sendCode"),
+  loginHint: document.querySelector("#loginHint"),
+  currentStoreName: document.querySelector("#currentStoreName"),
+  currentStaffName: document.querySelector("#currentStaffName"),
+  logoutButton: document.querySelector("#logoutButton"),
   navItems: document.querySelectorAll(".nav-item"),
   pageTitle: document.querySelector("#pageTitle"),
   views: {
@@ -41,6 +55,11 @@ const els = {
   ruleMinAmount: document.querySelector("#ruleMinAmount"),
   ruleBonusAmount: document.querySelector("#ruleBonusAmount"),
   bonusRuleList: document.querySelector("#bonusRuleList"),
+  staffForm: document.querySelector("#staffForm"),
+  staffName: document.querySelector("#staffName"),
+  staffPhone: document.querySelector("#staffPhone"),
+  staffRole: document.querySelector("#staffRole"),
+  staffList: document.querySelector("#staffList"),
   addMember: document.querySelector("#addMember"),
   addMemberTop: document.querySelector("#addMemberTop"),
   memberDialog: document.querySelector("#memberDialog"),
@@ -68,9 +87,12 @@ const viewTitles = {
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (!saved) {
-    state.members = [
-      createMember("示例会员", "13800000000", "AW0001", 100, "少冰三分糖"),
-    ];
+    const store = createStore("爱娃披萨店");
+    const manager = createStaff("店长", "13800000000", "manager", store.id);
+    state.stores = [store];
+    state.staff = [manager];
+    state.session = null;
+    state.members = [createMember("示例会员", "13800000000", "AW0001", 100, "少冰三分糖", store.id)];
     state.records = [
       createRecord(state.members[0].id, "recharge", 100, 100, "开卡充值"),
     ];
@@ -80,11 +102,25 @@ function loadState() {
 
   try {
     const parsed = JSON.parse(saved);
-    state.members = Array.isArray(parsed.members) ? parsed.members : [];
+    const fallbackStore = createStore("爱娃披萨店");
+    state.stores = Array.isArray(parsed.stores) && parsed.stores.length ? parsed.stores : [fallbackStore];
+    const defaultStoreId = state.stores[0].id;
+    state.staff =
+      Array.isArray(parsed.staff) && parsed.staff.length
+        ? parsed.staff.map((staffer) => normalizeStaff(staffer, defaultStoreId))
+        : [createStaff("店长", "13800000000", "manager", defaultStoreId)];
+    state.session = normalizeSession(parsed.session);
+    state.members = Array.isArray(parsed.members)
+      ? parsed.members.map((member) => normalizeMember(member, defaultStoreId))
+      : [];
     state.records = Array.isArray(parsed.records) ? parsed.records : [];
     state.settings = normalizeSettings(parsed.settings);
     state.records = state.records.map(normalizeRecord);
   } catch {
+    const store = createStore("爱娃披萨店");
+    state.stores = [store];
+    state.staff = [createStaff("店长", "13800000000", "manager", store.id)];
+    state.session = null;
     state.members = [];
     state.records = [];
     state.settings = normalizeSettings();
@@ -94,7 +130,14 @@ function loadState() {
 function saveState() {
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify({ members: state.members, records: state.records, settings: state.settings })
+    JSON.stringify({
+      stores: state.stores,
+      staff: state.staff,
+      session: state.session,
+      members: state.members,
+      records: state.records,
+      settings: state.settings,
+    })
   );
 }
 
@@ -102,9 +145,30 @@ function createId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function createMember(name, phone, card, balance, note) {
+function createStore(name) {
+  return {
+    id: createId("store"),
+    name,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createStaff(name, phone, role, storeId) {
+  return {
+    id: createId("staff"),
+    name,
+    phone: normalizePhone(phone),
+    role,
+    storeId,
+    active: true,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createMember(name, phone, card, balance, note, storeId = getCurrentStore()?.id) {
   return {
     id: createId("member"),
+    storeId,
     name,
     phone,
     card: card || nextCardNumber(),
@@ -118,6 +182,8 @@ function createRecord(memberId, type, amount, balanceAfter, note, bonusAmount = 
   return {
     id: createId("record"),
     memberId,
+    storeId: getMember(memberId)?.storeId || getCurrentStore()?.id,
+    staffId: state.session?.staffId || null,
     type,
     amount: Number(amount),
     bonusAmount: Number(bonusAmount) || 0,
@@ -141,9 +207,44 @@ function normalizeSettings(settings = {}) {
   return { bonusRules };
 }
 
+function normalizePhone(phone) {
+  return String(phone || "").replace(/\D/g, "");
+}
+
+function normalizeSession(session) {
+  if (!session?.staffId || !session?.storeId) return null;
+  return {
+    staffId: session.staffId,
+    storeId: session.storeId,
+    loggedInAt: session.loggedInAt || new Date().toISOString(),
+  };
+}
+
+function normalizeStaff(staffer, defaultStoreId) {
+  return {
+    id: staffer.id || createId("staff"),
+    name: staffer.name || "店员",
+    phone: normalizePhone(staffer.phone),
+    role: staffer.role === "manager" ? "manager" : "staff",
+    storeId: staffer.storeId || defaultStoreId,
+    active: staffer.active !== false,
+    createdAt: staffer.createdAt || new Date().toISOString(),
+  };
+}
+
+function normalizeMember(member, defaultStoreId) {
+  return {
+    ...member,
+    storeId: member.storeId || defaultStoreId,
+    balance: Number(member.balance) || 0,
+  };
+}
+
 function normalizeRecord(record) {
   return {
     ...record,
+    storeId: record.storeId || getMember(record.memberId)?.storeId || state.stores[0]?.id,
+    staffId: record.staffId || null,
     amount: Number(record.amount) || 0,
     bonusAmount: Number(record.bonusAmount) || 0,
     balanceAfter: Number(record.balanceAfter) || 0,
@@ -211,7 +312,7 @@ function recordTypeFilterLabel() {
 function getFilteredRecords() {
   const keyword = els.recordSearch.value.trim().toLowerCase();
   const type = els.recordTypeFilter.value;
-  return [...state.records]
+  return [...getStoreRecords()]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .filter((record) => {
       const member = getMember(record.memberId);
@@ -222,7 +323,7 @@ function getFilteredRecords() {
 }
 
 function nextCardNumber() {
-  const next = state.members.length + 1;
+  const next = getStoreMembers().length + 1;
   return `AW${String(next).padStart(4, "0")}`;
 }
 
@@ -260,17 +361,49 @@ function isToday(value) {
   );
 }
 
+function getCurrentStore() {
+  return state.stores.find((store) => store.id === state.session?.storeId) || state.stores[0];
+}
+
+function getCurrentStaff() {
+  return state.staff.find((staffer) => staffer.id === state.session?.staffId) || null;
+}
+
+function getStoreMembers() {
+  const storeId = getCurrentStore()?.id;
+  return state.members.filter((member) => member.storeId === storeId);
+}
+
+function getStoreRecords() {
+  const storeId = getCurrentStore()?.id;
+  return state.records.filter((record) => record.storeId === storeId || getMember(record.memberId)?.storeId === storeId);
+}
+
+function getStoreStaff() {
+  const storeId = getCurrentStore()?.id;
+  return state.staff.filter((staffer) => staffer.storeId === storeId);
+}
+
 function getMember(memberId) {
   return state.members.find((member) => member.id === memberId);
 }
 
 function render() {
+  renderSession();
   renderNavigation();
   renderDashboard();
   renderMembers();
   renderRecords();
   renderQuickMembers();
   renderBonusRules();
+  renderStaff();
+}
+
+function renderSession() {
+  const store = getCurrentStore();
+  const staffer = getCurrentStaff();
+  els.currentStoreName.textContent = store?.name || "未选择门店";
+  els.currentStaffName.textContent = staffer ? `${staffer.name} · ${staffer.role === "manager" ? "店长" : "店员"}` : "未登录";
 }
 
 function renderNavigation() {
@@ -284,21 +417,23 @@ function renderNavigation() {
 }
 
 function renderDashboard() {
-  const todayRecords = state.records.filter((record) => isToday(record.createdAt));
+  const storeRecords = getStoreRecords();
+  const storeMembers = getStoreMembers();
+  const todayRecords = storeRecords.filter((record) => isToday(record.createdAt));
   const todayRecharge = todayRecords
     .filter((record) => record.type === "recharge")
     .reduce((sum, record) => sum + record.amount, 0);
   const todaySpend = todayRecords
     .filter((record) => record.type === "spend")
     .reduce((sum, record) => sum + record.amount, 0);
-  const totalBalance = state.members.reduce((sum, member) => sum + member.balance, 0);
+  const totalBalance = storeMembers.reduce((sum, member) => sum + member.balance, 0);
 
-  els.memberCount.textContent = String(state.members.length);
+  els.memberCount.textContent = String(storeMembers.length);
   els.totalBalance.textContent = money(totalBalance);
   els.todayRecharge.textContent = money(todayRecharge);
   els.todaySpend.textContent = money(todaySpend);
 
-  const recent = [...state.records]
+  const recent = [...storeRecords]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 6);
 
@@ -313,14 +448,15 @@ function renderDashboard() {
 }
 
 function renderQuickMembers() {
-  if (!state.members.length) {
+  const storeMembers = getStoreMembers();
+  if (!storeMembers.length) {
     els.quickMember.innerHTML = '<option value="">请先新增会员</option>';
     els.quickMember.disabled = true;
     return;
   }
 
   els.quickMember.disabled = false;
-  els.quickMember.innerHTML = state.members
+  els.quickMember.innerHTML = storeMembers
     .map(
       (member) =>
         `<option value="${member.id}">${escapeHtml(member.name)} - ${escapeHtml(member.card)} - ${money(member.balance)}</option>`
@@ -330,14 +466,15 @@ function renderQuickMembers() {
 
 function renderMembers() {
   const keyword = els.memberSearch.value.trim().toLowerCase();
-  const members = state.members.filter((member) => {
+  const storeMembers = getStoreMembers();
+  const members = storeMembers.filter((member) => {
     const text = `${member.name} ${member.phone} ${member.card}`.toLowerCase();
     return text.includes(keyword);
   });
 
   if (!members.length) {
     els.memberList.className = "member-list empty-state";
-    els.memberList.textContent = state.members.length ? "没有匹配的会员" : "暂无会员";
+    els.memberList.textContent = storeMembers.length ? "没有匹配的会员" : "暂无会员";
     return;
   }
 
@@ -433,6 +570,86 @@ function renderBonusRules() {
     .join("");
 }
 
+function renderStaff() {
+  const staff = getStoreStaff();
+  if (!staff.length) {
+    els.staffList.className = "rule-list empty-state";
+    els.staffList.textContent = "暂无店员";
+    return;
+  }
+
+  els.staffList.className = "rule-list";
+  els.staffList.innerHTML = staff
+    .map(
+      (staffer) => `
+        <article class="rule-item">
+          <div>
+            <strong>${escapeHtml(staffer.name)} · ${staffer.role === "manager" ? "店长" : "店员"}</strong>
+            <span>${escapeHtml(staffer.phone)} · ${staffer.active ? "可登录" : "已停用"}</span>
+          </div>
+          <button class="mini-button ${staffer.active ? "danger-button" : ""}" data-toggle-staff="${staffer.id}" type="button">
+            ${staffer.active ? "停用" : "启用"}
+          </button>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function showLogin() {
+  els.loginScreen.classList.remove("hidden");
+  els.appShell.classList.add("hidden");
+}
+
+function showApp() {
+  els.loginScreen.classList.add("hidden");
+  els.appShell.classList.remove("hidden");
+  render();
+}
+
+function ensureSession() {
+  const staffer = getCurrentStaff();
+  const store = getCurrentStore();
+  if (staffer?.active && store) {
+    showApp();
+  } else {
+    state.session = null;
+    saveState();
+    showLogin();
+  }
+}
+
+function sendTestCode() {
+  const phone = normalizePhone(els.loginPhone.value);
+  const staffer = state.staff.find((item) => item.phone === phone && item.active);
+  if (!staffer) {
+    els.loginHint.textContent = "这个手机号还没有录入为店员，请先让店长添加。";
+    return;
+  }
+  els.loginHint.textContent = `测试验证码已发送：${OTP_TEST_CODE}`;
+}
+
+function loginWithCode() {
+  const phone = normalizePhone(els.loginPhone.value);
+  const code = els.loginCode.value.trim();
+  const staffer = state.staff.find((item) => item.phone === phone && item.active);
+  if (!staffer) {
+    els.loginHint.textContent = "这个手机号还没有录入为店员，无法登录。";
+    return;
+  }
+  if (code !== OTP_TEST_CODE) {
+    els.loginHint.textContent = "验证码不正确，测试阶段请输入 123456。";
+    return;
+  }
+  state.session = {
+    staffId: staffer.id,
+    storeId: staffer.storeId,
+    loggedInAt: new Date().toISOString(),
+  };
+  saveState();
+  showApp();
+}
+
 function switchView(view) {
   state.activeView = view;
   render();
@@ -476,7 +693,7 @@ function saveMemberFromForm() {
       state.records.push(createRecord(id, "adjust", balance - previousBalance, balance, "手动调整余额"));
     }
   } else {
-    const member = createMember(name, phone, card, balance, note);
+    const member = createMember(name, phone, card, balance, note, getCurrentStore()?.id);
     state.members.push(member);
     if (balance > 0) {
       state.records.push(createRecord(member.id, "recharge", balance, balance, "开卡初始余额"));
@@ -704,6 +921,17 @@ els.navItems.forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
 });
 
+els.sendCode.addEventListener("click", sendTestCode);
+els.loginForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  loginWithCode();
+});
+els.logoutButton.addEventListener("click", () => {
+  state.session = null;
+  saveState();
+  showLogin();
+});
+
 document.querySelectorAll("[data-view-jump]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.viewJump));
 });
@@ -770,6 +998,41 @@ els.bonusRuleList.addEventListener("click", (event) => {
   renderBonusRules();
 });
 
+els.staffForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = els.staffName.value.trim();
+  const phone = normalizePhone(els.staffPhone.value);
+  const role = els.staffRole.value;
+  if (!name || !phone) {
+    alert("请填写店员姓名和手机号");
+    return;
+  }
+  if (getStoreStaff().some((staffer) => staffer.phone === phone)) {
+    alert("这个手机号已经是当前门店店员");
+    return;
+  }
+  state.staff.push(createStaff(name, phone, role, getCurrentStore()?.id));
+  saveState();
+  els.staffName.value = "";
+  els.staffPhone.value = "";
+  els.staffRole.value = "staff";
+  renderStaff();
+});
+
+els.staffList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-toggle-staff]");
+  if (!button) return;
+  const staffer = state.staff.find((item) => item.id === button.dataset.toggleStaff);
+  if (!staffer) return;
+  if (staffer.id === state.session?.staffId && staffer.active) {
+    alert("不能停用当前登录的账号");
+    return;
+  }
+  staffer.active = !staffer.active;
+  saveState();
+  renderStaff();
+});
+
 els.memberList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
@@ -795,4 +1058,4 @@ els.memberList.addEventListener("click", (event) => {
 });
 
 loadState();
-render();
+ensureSession();

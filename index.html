@@ -7,7 +7,30 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <div class="app-shell">
+    <section id="loginScreen" class="login-screen">
+      <div class="login-card">
+        <img class="login-logo" src="assets/aiwa-pizza-logo.jpg" alt="爱娃披萨店 logo">
+        <h1>爱娃披萨店</h1>
+        <p>店员手机号验证码登录</p>
+        <form id="loginForm" class="login-form">
+          <label>
+            手机号
+            <input id="loginPhone" type="tel" placeholder="请输入已录入的店员手机号" required>
+          </label>
+          <div class="code-row">
+            <label>
+              验证码
+              <input id="loginCode" type="text" inputmode="numeric" placeholder="测试验证码 123456" required>
+            </label>
+            <button id="sendCode" class="ghost-button" type="button">获取验证码</button>
+          </div>
+          <button class="primary-button" type="submit">登录</button>
+        </form>
+        <p id="loginHint" class="login-hint">测试阶段验证码固定为 123456，正式上线后接入腾讯云短信。</p>
+      </div>
+    </section>
+
+    <div id="appShell" class="app-shell hidden">
       <aside class="sidebar">
         <div class="brand">
           <img class="brand-logo" src="assets/aiwa-pizza-logo.jpg" alt="爱娃披萨店 logo">
@@ -25,6 +48,11 @@
         </nav>
 
         <div class="sidebar-footer">
+          <div class="session-card">
+            <span id="currentStoreName">爱娃披萨店</span>
+            <strong id="currentStaffName">未登录</strong>
+          </div>
+          <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
           <button id="exportData" class="ghost-button" type="button">导出数据</button>
           <label class="import-label">
             导入数据
@@ -167,6 +195,31 @@
               <button class="primary-button span-2" type="submit">添加规则</button>
             </form>
             <div id="bonusRuleList" class="rule-list empty-state">暂无赠送规则</div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <h3>店员管理</h3>
+            </div>
+            <form id="staffForm" class="form-grid">
+              <label>
+                店员姓名
+                <input id="staffName" type="text" placeholder="例如 小王" required>
+              </label>
+              <label>
+                店员手机号
+                <input id="staffPhone" type="tel" placeholder="例如 13800000000" required>
+              </label>
+              <label>
+                角色
+                <select id="staffRole">
+                  <option value="staff">店员</option>
+                  <option value="manager">店长</option>
+                </select>
+              </label>
+              <button class="primary-button" type="submit">添加店员</button>
+            </form>
+            <div id="staffList" class="rule-list empty-state">暂无店员</div>
           </section>
         </section>
       </main>

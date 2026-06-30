@@ -36,6 +36,66 @@ button {
   cursor: pointer;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.login-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+  background: #24342f;
+}
+
+.login-card {
+  width: min(440px, 100%);
+  padding: 28px;
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.login-logo {
+  display: block;
+  width: 86px;
+  height: 86px;
+  margin-bottom: 18px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.login-card h1,
+.login-card p {
+  margin: 0;
+}
+
+.login-card h1 {
+  font-size: 30px;
+}
+
+.login-card p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.code-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.login-hint {
+  font-size: 13px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -115,6 +175,24 @@ button {
   display: grid;
   gap: 10px;
   margin-top: auto;
+}
+
+.session-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(255, 250, 243, 0.24);
+  border-radius: 8px;
+  color: #fffaf3;
+}
+
+.session-card span {
+  color: #cfd8d3;
+  font-size: 13px;
+}
+
+.session-card strong {
+  font-size: 15px;
 }
 
 .import-label {
@@ -457,6 +535,13 @@ tr:last-child td {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.rule-item span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .dialog {
