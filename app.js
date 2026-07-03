@@ -1,7 +1,15 @@
 const STORAGE_KEY = "aiwa_drink_membership_v1";
 const OTP_TEST_CODE = "123456";
+const cloudConfig = window.AIWA_CLOUDBASE_CONFIG || {};
+let cloudSaveTimer = null;
 
 const state = {
+  cloud: {
+    enabled: Boolean(cloudConfig.enabled),
+    ready: false,
+    booting: false,
+    message: "本地模式",
+  },
   stores: [],
   staff: [],
   session: null,
@@ -12,6 +20,51 @@ const state = {
   },
   activeView: "dashboard",
 };
+
+async function initCloudBase() {
+  if (!cloudConfig.enabled) {
+    state.cloud.message = cloudConfig.envId
+      ? `CloudBase 环境已记录：${cloudConfig.envId}，当前仍使用本地模式`
+      : "本地模式";
+    return;
+  }
+
+  if (!window.cloudbase || !cloudConfig.envId) {
+    state.cloud.enabled = false;
+    state.cloud.message = "CloudBase SDK 未加载，已切换本地模式";
+    return;
+  }
+
+  try {
+    state.cloud.app = window.cloudbase.init({ env: cloudConfig.envId });
+    state.cloud.auth = state.cloud.app.auth();
+    state.cloud.db = state.cloud.app.database();
+    if (state.cloud.auth?.anonymousAuthProvider) {
+      await state.cloud.auth.anonymousAuthProvider().signIn().catch(() => {});
+    }
+    state.cloud.ready = true;
+    state.cloud.message = `CloudBase 已连接：${cloudConfig.envId}`;
+  } catch (error) {
+    state.cloud.enabled = false;
+    state.cloud.ready = false;
+    state.cloud.message = "CloudBase 初始化失败，已切换本地模式";
+    console.warn("[CloudBase]", error);
+  }
+}
+
+async function callCloud(action, payload = {}) {
+  if (!state.cloud.ready || !state.cloud.app?.callFunction) {
+    throw new Error("CloudBase is not ready");
+  }
+  const result = await state.cloud.app.callFunction({
+    name: cloudConfig.functions?.membershipApi || "membershipApi",
+    data: { action, payload },
+  });
+  if (!result.result?.ok) {
+    throw new Error(result.result?.message || "CloudBase request failed");
+  }
+  return result.result;
+}
 
 const els = {
   loginScreen: document.querySelector("#loginScreen"),
@@ -127,18 +180,95 @@ function loadState() {
   }
 }
 
-function saveState() {
+function serializeState() {
+  return {
+    stores: state.stores,
+    staff: state.staff,
+    session: state.session,
+    members: state.members,
+    records: state.records,
+    settings: state.settings,
+  };
+}
+
+function saveState(options = {}) {
   localStorage.setItem(
     STORAGE_KEY,
-    JSON.stringify({
-      stores: state.stores,
-      staff: state.staff,
-      session: state.session,
-      members: state.members,
-      records: state.records,
-      settings: state.settings,
-    })
+    JSON.stringify(serializeState())
   );
+
+  if (options.sync !== false && state.cloud.ready && !state.cloud.booting) {
+    scheduleCloudSave();
+  }
+}
+
+function applyData(data, options = {}) {
+  const fallbackStore = createStore("爱娃披萨店");
+  state.stores = Array.isArray(data.stores) && data.stores.length ? data.stores : [fallbackStore];
+  const defaultStoreId = state.stores[0].id;
+  state.staff =
+    Array.isArray(data.staff) && data.staff.length
+      ? data.staff.map((staffer) => normalizeStaff(staffer, defaultStoreId))
+      : [createStaff("店长", "13800000000", "manager", defaultStoreId)];
+  state.session = options.keepSession ? state.session : normalizeSession(data.session);
+  state.members = Array.isArray(data.members)
+    ? data.members.map((member) => normalizeMember(member, defaultStoreId))
+    : [];
+  state.records = Array.isArray(data.records) ? data.records.map(normalizeRecord) : [];
+  state.settings = normalizeSettings(data.settings);
+}
+
+function hasBusinessData(data = serializeState()) {
+  return (
+    (Array.isArray(data.members) && data.members.length > 1) ||
+    (Array.isArray(data.records) && data.records.length > 1) ||
+    (Array.isArray(data.staff) && data.staff.length > 1) ||
+    (Array.isArray(data.settings?.bonusRules) && data.settings.bonusRules.length > 0)
+  );
+}
+
+async function syncFromCloud() {
+  if (!state.cloud.ready) return;
+
+  try {
+    const localSnapshot = serializeState();
+    const result = await callCloud("getStoreData");
+
+    if (result.isNew && hasBusinessData(localSnapshot)) {
+      await callCloud("saveStoreData", { data: localSnapshot });
+      state.cloud.message = "CloudBase 已用本地数据初始化";
+      return;
+    }
+
+    if (result.data) {
+      const currentSession = state.session;
+      applyData(result.data, { keepSession: true });
+      state.session = currentSession;
+      saveState({ sync: false });
+      state.cloud.message = "CloudBase 数据已同步";
+    }
+  } catch (error) {
+    state.cloud.ready = false;
+    state.cloud.message = "CloudBase 同步失败，已继续使用本地数据";
+    console.warn("[CloudBase sync]", error);
+  }
+}
+
+function scheduleCloudSave() {
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(pushCloudState, 500);
+}
+
+async function pushCloudState() {
+  if (!state.cloud.ready) return;
+  try {
+    await callCloud("saveStoreData", { data: serializeState() });
+    state.cloud.message = "CloudBase 数据已保存";
+  } catch (error) {
+    state.cloud.ready = false;
+    state.cloud.message = "CloudBase 保存失败，已继续使用本地数据";
+    console.warn("[CloudBase save]", error);
+  }
 }
 
 function createId(prefix) {
@@ -619,8 +749,20 @@ function ensureSession() {
   }
 }
 
-function sendTestCode() {
+async function sendTestCode() {
   const phone = normalizePhone(els.loginPhone.value);
+
+  if (state.cloud.ready) {
+    try {
+      const result = await callCloud("sendLoginCode", { phone });
+      els.loginHint.textContent = result.message || `测试验证码已发送：${result.testCode || OTP_TEST_CODE}`;
+      return;
+    } catch (error) {
+      els.loginHint.textContent = error.message || "云端验证码发送失败，已使用本地测试模式。";
+      console.warn("[CloudBase login]", error);
+    }
+  }
+
   const staffer = state.staff.find((item) => item.phone === phone && item.active);
   if (!staffer) {
     els.loginHint.textContent = "这个手机号还没有录入为店员，请先让店长添加。";
@@ -629,9 +771,23 @@ function sendTestCode() {
   els.loginHint.textContent = `测试验证码已发送：${OTP_TEST_CODE}`;
 }
 
-function loginWithCode() {
+async function loginWithCode() {
   const phone = normalizePhone(els.loginPhone.value);
   const code = els.loginCode.value.trim();
+
+  if (state.cloud.ready) {
+    try {
+      const result = await callCloud("verifyLoginCode", { phone, code });
+      state.session = normalizeSession(result.session);
+      saveState();
+      showApp();
+      return;
+    } catch (error) {
+      els.loginHint.textContent = error.message || "云端登录失败，已使用本地测试模式。";
+      console.warn("[CloudBase login]", error);
+    }
+  }
+
   const staffer = state.staff.find((item) => item.phone === phone && item.active);
   if (!staffer) {
     els.loginHint.textContent = "这个手机号还没有录入为店员，无法登录。";
@@ -876,9 +1032,23 @@ function printFilteredRecordStatement() {
 }
 
 function exportData() {
-  const blob = new Blob([JSON.stringify({ members: state.members, records: state.records }, null, 2)], {
-    type: "application/json",
-  });
+  const blob = new Blob(
+    [
+      JSON.stringify(
+        {
+          stores: state.stores,
+          staff: state.staff,
+          session: state.session,
+          members: state.members,
+          records: state.records,
+          settings: state.settings,
+        },
+        null,
+        2
+      ),
+    ],
+    { type: "application/json" }
+  );
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -895,7 +1065,15 @@ function importData(file) {
       if (!Array.isArray(data.members) || !Array.isArray(data.records)) {
         throw new Error("Invalid data");
       }
-      state.members = data.members;
+      const fallbackStore = createStore("爱娃披萨店");
+      state.stores = Array.isArray(data.stores) && data.stores.length ? data.stores : [fallbackStore];
+      const defaultStoreId = state.stores[0].id;
+      state.staff =
+        Array.isArray(data.staff) && data.staff.length
+          ? data.staff.map((staffer) => normalizeStaff(staffer, defaultStoreId))
+          : [createStaff("店长", "13800000000", "manager", defaultStoreId)];
+      state.session = normalizeSession(data.session);
+      state.members = data.members.map((member) => normalizeMember(member, defaultStoreId));
       state.records = data.records.map(normalizeRecord);
       state.settings = normalizeSettings(data.settings);
       saveState();
@@ -921,7 +1099,9 @@ els.navItems.forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
 });
 
-els.sendCode.addEventListener("click", sendTestCode);
+els.sendCode.addEventListener("click", () => {
+  sendTestCode();
+});
 els.loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
   loginWithCode();
@@ -1057,5 +1237,10 @@ els.memberList.addEventListener("click", (event) => {
   addTransaction(member.id, button.dataset.action, amount, note);
 });
 
-loadState();
-ensureSession();
+initCloudBase().finally(async () => {
+  state.cloud.booting = true;
+  loadState();
+  state.cloud.booting = false;
+  await syncFromCloud();
+  ensureSession();
+});

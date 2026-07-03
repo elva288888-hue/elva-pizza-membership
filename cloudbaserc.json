@@ -1,0 +1,11 @@
+{
+  "envId": "elva-pizza-test-d1far2ax4213b224",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "membershipApi",
+      "timeout": 10,
+      "runtime": "Nodejs16.13"
+    }
+  ]
+}
