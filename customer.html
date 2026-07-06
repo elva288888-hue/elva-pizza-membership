@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>爱娃披萨店自助点餐</title>
+    <link rel="stylesheet" href="customer.css?v=20260706-3">
+    <script defer src="https://static.cloudbase.net/cloudbase-js-sdk/1.8.1/cloudbase.full.js"></script>
+    <script defer src="cloudbase-config.js?v=20260706-2"></script>
+    <script defer src="customer.js?v=20260706-3"></script>
+  </head>
+  <body>
+    <header class="shop-header">
+      <div>
+        <img src="assets/aiwa-pizza-logo.jpg" alt="爱娃披萨店 logo">
+        <div>
+          <h1>爱娃披萨店</h1>
+          <p>自助点餐 · 自取或配送</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <a href="mobile-test.html" target="_blank" rel="noreferrer">手机扫码测试</a>
+        <button id="historyToggle" type="button">我的订单</button>
+      </div>
+    </header>
+
+    <main class="shop-main">
+      <section id="authPanel" class="member-panel auth-panel">
+        <div>
+          <h2>微信授权</h2>
+          <p id="authStatus">扫码后将自动识别顾客身份，本地测试可使用模拟授权。</p>
+        </div>
+        <span id="syncStatus" class="sync-status">检查同步中</span>
+        <button id="authorizeCustomer" class="auth-button" type="button">模拟微信授权进入</button>
+      </section>
+
+      <section class="member-panel member-center-panel">
+        <div>
+          <h2>会员中心</h2>
+          <p id="memberStatus">授权后可加入会员、充值并使用余额支付</p>
+        </div>
+        <div class="member-actions">
+          <button id="joinMember" type="button">加入会员</button>
+          <button id="openRecharge" type="button">会员充值</button>
+        </div>
+      </section>
+
+      <section class="member-panel order-info-panel">
+        <div>
+          <h2>取餐方式</h2>
+        </div>
+        <form id="customerForm" class="customer-form">
+          <fieldset class="choice-field span-all">
+            <legend>订单方式</legend>
+            <label>
+              <input name="fulfillmentType" type="radio" value="pickup" checked>
+              到店取餐
+            </label>
+            <label>
+              <input name="fulfillmentType" type="radio" value="delivery">
+              配送
+            </label>
+          </fieldset>
+          <fieldset id="pickupFields" class="choice-field span-all">
+            <legend>取餐时间</legend>
+            <label>
+              <input name="pickupMode" type="radio" value="now" checked>
+              即时取餐
+            </label>
+            <label>
+              <input name="pickupMode" type="radio" value="scheduled">
+              预约取餐
+            </label>
+          </fieldset>
+          <div id="scheduledPickupFields" class="scheduled-fields hidden span-all">
+            <label>
+              取餐日期
+              <input id="pickupDate" type="date">
+            </label>
+            <label>
+              取餐时间
+              <input id="pickupTime" type="time">
+            </label>
+          </div>
+          <div id="deliveryFields" class="delivery-fields hidden span-all">
+            <label class="span-all">
+              常用地址
+              <select id="savedAddressSelect">
+                <option value="">填写新地址</option>
+              </select>
+            </label>
+            <label class="span-all">
+              配送地址
+              <input id="deliveryAddress" type="text" placeholder="请输入详细地址">
+            </label>
+            <label class="save-address-row span-all">
+              <input id="saveDeliveryAddress" type="checkbox" checked>
+              保存为常用地址，下次自动带出
+            </label>
+            <label>
+              期望送达日期
+              <input id="deliveryDate" type="date">
+            </label>
+            <label>
+              期望送达时间
+              <input id="deliveryTime" type="time">
+            </label>
+          </div>
+        </form>
+      </section>
+
+      <nav id="categoryTabs" class="category-tabs" aria-label="商品分类"></nav>
+
+      <section id="productGrid" class="product-grid"></section>
+    </main>
+
+    <aside id="cartPanel" class="cart-panel empty-cart">
+      <div>
+        <h2>购物车</h2>
+        <span id="cartCount">0 件</span>
+      </div>
+      <div id="cartItems" class="cart-items empty">请先选择商品</div>
+      <label>
+        备注
+        <textarea id="orderNote" rows="2" placeholder="口味、餐具或其他备注"></textarea>
+      </label>
+      <label>
+        支付方式
+        <select id="paymentMethod">
+          <option value="wechat_pay">微信支付</option>
+          <option value="alipay_pay">支付宝</option>
+          <option value="member_balance">会员余额支付</option>
+        </select>
+        <span id="paymentHint" class="payment-hint">微信内完成付款后自动下单</span>
+      </label>
+      <div class="cart-total">
+        <span>合计</span>
+        <strong id="cartTotal">¥0.00</strong>
+      </div>
+      <button id="submitOrder" class="submit-order" type="button">立即付款并下单</button>
+      <p id="orderHint"></p>
+    </aside>
+
+    <dialog id="historyDialog">
+      <div class="history-shell">
+        <header>
+          <h2>我的订单</h2>
+          <button id="closeHistory" type="button">×</button>
+        </header>
+        <section class="wallet-panel">
+          <div>
+            <strong>会员余额</strong>
+            <span id="walletStatus">授权后查看</span>
+          </div>
+        </section>
+        <div id="historyList" class="history-list empty">请输入手机号后查看订单</div>
+      </div>
+    </dialog>
+
+    <dialog id="rechargeDialog">
+      <form id="rechargeForm" class="history-shell recharge-dialog" method="dialog">
+        <header>
+          <h2>会员充值</h2>
+          <button id="closeRecharge" type="button">×</button>
+        </header>
+        <p id="rechargeHint">充值后可使用会员余额支付订单。</p>
+        <label>
+          充值金额
+          <input id="rechargeAmount" type="number" min="1" step="1" placeholder="例如 100">
+        </label>
+        <label>
+          充值支付方式
+          <select id="rechargePaymentMethod">
+            <option value="wechat_pay">微信支付</option>
+            <option value="alipay_pay">支付宝</option>
+          </select>
+        </label>
+        <button type="submit" class="submit-order">确认充值</button>
+      </form>
+    </dialog>
+  </body>
+</html>

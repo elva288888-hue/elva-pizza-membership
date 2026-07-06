@@ -9,6 +9,10 @@ const COLLECTIONS = {
   staff: "staff",
   members: "members",
   transactions: "transactions",
+  categories: "categories",
+  products: "products",
+  orders: "orders",
+  refunds: "refunds",
   bonusRules: "bonusrules",
   loginCodes: "login_codes",
 };
@@ -16,6 +20,8 @@ const COLLECTIONS = {
 const DEFAULT_STORE_ID = "store_aiwa_pizza_main";
 const DEFAULT_MANAGER_ID = "staff_aiwa_manager";
 const TEST_CODE = "123456";
+const CODE_EXPIRE_MINUTES = 5;
+const LOGIN_CODE_COOLDOWN_MS = 60 * 1000;
 
 exports.main = async (event = {}) => {
   const { action, payload = {} } = event;
@@ -48,6 +54,10 @@ async function getStoreData() {
       staff: await safeGetAll(COLLECTIONS.staff),
       members: await safeGetAll(COLLECTIONS.members),
       records: await safeGetAll(COLLECTIONS.transactions),
+      categories: await safeGetAll(COLLECTIONS.categories),
+      products: await safeGetAll(COLLECTIONS.products),
+      orders: await safeGetAll(COLLECTIONS.orders),
+      refunds: await safeGetAll(COLLECTIONS.refunds),
       settings: {
         bonusRules: await safeGetAll(COLLECTIONS.bonusRules),
       },
@@ -62,6 +72,10 @@ async function saveStoreData(data) {
   await safeReplaceCollection(COLLECTIONS.staff, data.staff || [], warnings);
   await safeReplaceCollection(COLLECTIONS.members, data.members || [], warnings);
   await safeReplaceCollection(COLLECTIONS.transactions, data.records || [], warnings);
+  await safeReplaceCollection(COLLECTIONS.categories, data.categories || [], warnings);
+  await safeReplaceCollection(COLLECTIONS.products, data.products || [], warnings);
+  await safeReplaceCollection(COLLECTIONS.orders, data.orders || [], warnings);
+  await safeReplaceCollection(COLLECTIONS.refunds, data.refunds || [], warnings);
   await safeReplaceCollection(COLLECTIONS.bonusRules, data.settings?.bonusRules || [], warnings);
 
   return ok({ savedAt: new Date().toISOString(), warnings });
@@ -75,20 +89,43 @@ async function sendLoginCode(phone) {
     return fail("这个手机号还没有录入为店员，请先让店长添加。");
   }
 
+  const previousCode = await getDoc(COLLECTIONS.loginCodes, normalizedPhone);
+  if (
+    previousCode?.createdAtMs &&
+    Date.now() - Number(previousCode.createdAtMs) < LOGIN_CODE_COOLDOWN_MS
+  ) {
+    return fail("验证码刚刚已发送，请 1 分钟后再试。");
+  }
+
+  const smsReady = isSmsConfigured();
+  const code = smsReady ? createLoginCode() : TEST_CODE;
+  const expiresAt = Date.now() + CODE_EXPIRE_MINUTES * 60 * 1000;
+
+  if (smsReady) {
+    const smsResult = await sendSmsCode(normalizedPhone, code);
+    if (!smsResult.ok) {
+      console.error("[sms send failed]", smsResult.error);
+      return fail("短信发送失败，请稍后重试或联系店长。");
+    }
+  }
+
   await upsert(COLLECTIONS.loginCodes, normalizedPhone, {
     _id: normalizedPhone,
     phone: normalizedPhone,
-    code: TEST_CODE,
-    expiresAt: Date.now() + 5 * 60 * 1000,
+    code,
+    expiresAt,
+    createdAtMs: Date.now(),
     createdAt: new Date().toISOString(),
+    mode: smsReady ? "sms" : "test",
   }).catch((error) => {
     console.warn("[login_codes skipped]", error);
   });
 
-  return ok({
-    message: "测试验证码已生成。正式上线后这里会接入腾讯云短信发送。",
-    testCode: TEST_CODE,
-  });
+  if (smsReady) {
+    return ok({ message: "验证码已发送，请查看手机短信。", expiresInMinutes: CODE_EXPIRE_MINUTES });
+  }
+
+  return ok({ message: "测试验证码已生成。正式短信配置完成前，请输入 123456。", testCode: TEST_CODE });
 }
 
 async function verifyLoginCode(phone, code) {
@@ -100,7 +137,7 @@ async function verifyLoginCode(phone, code) {
   }
 
   const codeDoc = await getDoc(COLLECTIONS.loginCodes, normalizedPhone);
-  const isTestCode = code === TEST_CODE;
+  const isTestCode = !isSmsConfigured() && code === TEST_CODE;
   const isValidCloudCode =
     codeDoc && codeDoc.code === code && Number(codeDoc.expiresAt || 0) > Date.now();
 
@@ -115,6 +152,68 @@ async function verifyLoginCode(phone, code) {
       loggedInAt: new Date().toISOString(),
     },
   });
+}
+
+function isSmsConfigured() {
+  return [
+    "TENCENT_SECRET_ID",
+    "TENCENT_SECRET_KEY",
+    "TENCENT_SMS_SDK_APP_ID",
+    "TENCENT_SMS_SIGN_NAME",
+    "TENCENT_SMS_TEMPLATE_ID",
+  ].every((name) => Boolean(process.env[name]));
+}
+
+function createLoginCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function buildTemplateParams(code) {
+  const configured = process.env.TENCENT_SMS_TEMPLATE_PARAMS;
+  if (!configured) return [code, String(CODE_EXPIRE_MINUTES)];
+
+  return configured.split(",").map((item) =>
+    item
+      .trim()
+      .replace(/\{code\}/g, code)
+      .replace(/\{minutes\}/g, String(CODE_EXPIRE_MINUTES))
+  );
+}
+
+async function sendSmsCode(phone, code) {
+  try {
+    const tencentcloud = require("tencentcloud-sdk-nodejs");
+    const SmsClient = tencentcloud.sms.v20210111.Client;
+    const client = new SmsClient({
+      credential: {
+        secretId: process.env.TENCENT_SECRET_ID,
+        secretKey: process.env.TENCENT_SECRET_KEY,
+      },
+      region: process.env.TENCENT_SMS_REGION || "ap-guangzhou",
+      profile: {
+        httpProfile: {
+          endpoint: "sms.tencentcloudapi.com",
+        },
+      },
+    });
+
+    const response = await client.SendSms({
+      SmsSdkAppId: process.env.TENCENT_SMS_SDK_APP_ID,
+      SignName: process.env.TENCENT_SMS_SIGN_NAME,
+      TemplateId: process.env.TENCENT_SMS_TEMPLATE_ID,
+      TemplateParamSet: buildTemplateParams(code),
+      PhoneNumberSet: [`+86${phone}`],
+    });
+
+    const status = response?.SendStatusSet?.[0];
+    if (!status || status.Code !== "Ok") {
+      return { ok: false, error: status || response };
+    }
+
+    return { ok: true, response };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 async function seedDefaultStore() {

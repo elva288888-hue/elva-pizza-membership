@@ -1,3 +1,21 @@
 .cloudbase-home/
 .DS_Store
 public-site/
+.local-test-data.json
+.local-test-server.log
+.local-test-server.pid
+__pycache__/
+outputs/
+work/
+review-materials/
+github-upload/
+github-upload 2/
+*.zip
+*.mov
+*.mp4
+*.mp3
+*.wav
+*.aiff
+Weixin Image_*.jpg
+营业执照.jpg
+门店照片.jpg
