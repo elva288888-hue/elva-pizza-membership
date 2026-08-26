@@ -1,0 +1,15 @@
+{
+  "test": {
+    "envId": "elva-pizza-test-d1far2ax4213b224",
+    "envName": "elva-pizza-test",
+    "accountId": "100047037371",
+    "region": "ap-shanghai",
+    "siteUrl": "https://elva-pizza-test-d1far2ax4213b224-1448876255.tcloudbaseapp.com"
+  },
+  "production": {
+    "envId": "elva-pizza-prod-d3f8fae10cb05aca",
+    "envName": "elva-pizza-prod",
+    "accountId": "100047037371",
+    "region": "ap-shanghai"
+  }
+}

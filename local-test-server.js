@@ -4,7 +4,9 @@ const path = require("path");
 
 const root = __dirname;
 const port = Number(process.env.PORT || 4173);
-const dataFile = path.join(root, ".local-test-data.json");
+const dataFile = process.env.DATA_FILE
+  ? path.resolve(process.env.DATA_FILE)
+  : path.join(root, ".local-test-data.json");
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -105,7 +107,8 @@ function safeStaticPath(urlPath) {
   return filePath;
 }
 
-const server = http.createServer(async (request, response) => {
+function createServer() {
+  return http.createServer(async (request, response) => {
   if (request.method === "OPTIONS") {
     sendJson(response, 204, {});
     return;
@@ -145,9 +148,20 @@ const server = http.createServer(async (request, response) => {
     "Cache-Control": "no-store",
   });
   fs.createReadStream(filePath).pipe(response);
-});
+  });
+}
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`Local test server: http://127.0.0.1:${port}`);
-  console.log(`Shared data file: ${dataFile}`);
-});
+if (require.main === module) {
+  const server = createServer();
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`Local test server: http://127.0.0.1:${port}`);
+    console.log(`Shared data file: ${dataFile}`);
+  });
+}
+
+module.exports = {
+  createServer,
+  mergeById,
+  mergeData,
+  safeStaticPath,
+};

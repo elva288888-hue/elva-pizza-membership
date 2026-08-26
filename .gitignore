@@ -4,6 +4,7 @@ public-site/
 .local-test-data.json
 .local-test-server.log
 .local-test-server.pid
+gcm-diagnose.log
 __pycache__/
 outputs/
 work/
@@ -19,3 +20,31 @@ github-upload 2/
 Weixin Image_*.jpg
 营业执照.jpg
 门店照片.jpg
+.build/
+node_modules/
+**/node_modules/
+.codex-preview/
+.codex-preview-current.png
+.codex-preview-info.json
+.codex-tcb-config/
+.vscode/
+.design-qa-*.png
+.design-qa-*.jpg
+*.pem
+*.key
+.env
+.env.*
+!*.env.example
+
+# 本地测试二维码与经营资质文件不进入代码仓库
+*二维码*.png
+*体验码*.png
+*小程序码*.png
+*体验版*.png
+.design-qa*.md
+design-qa.md
+docs/bank-payment-info-needed.md
+法人身份证.jpg
+经营许可证.jpg
+食品许可证.jpg
+说明.jpg

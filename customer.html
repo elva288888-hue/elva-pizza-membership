@@ -4,10 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>爱娃披萨店自助点餐</title>
-    <link rel="stylesheet" href="customer.css?v=20260706-3">
-    <script defer src="https://static.cloudbase.net/cloudbase-js-sdk/1.8.1/cloudbase.full.js"></script>
-    <script defer src="cloudbase-config.js?v=20260706-2"></script>
-    <script defer src="customer.js?v=20260706-3"></script>
+    <link rel="stylesheet" href="customer.css?v=20260706-12">
+    <script defer src="cloudbase-config.js?v=20260706-12"></script>
+    <script defer src="customer.js?v=20260706-12"></script>
   </head>
   <body>
     <header class="shop-header">
@@ -27,17 +26,24 @@
     <main class="shop-main">
       <section id="authPanel" class="member-panel auth-panel">
         <div>
-          <h2>微信授权</h2>
-          <p id="authStatus">扫码后将自动识别顾客身份，本地测试可使用模拟授权。</p>
+          <h2>身份确认</h2>
+          <p id="authStatus">首次点餐请验证手机号，之后扫码会自动匹配会员余额和订单。</p>
         </div>
         <span id="syncStatus" class="sync-status">检查同步中</span>
-        <button id="authorizeCustomer" class="auth-button" type="button">模拟微信授权进入</button>
+        <form id="phoneBindForm" class="phone-bind-form">
+          <input id="bindName" type="text" autocomplete="name" placeholder="称呼" required>
+          <input id="bindPhone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="手机号" required pattern="1[0-9]{10}" maxlength="11">
+          <button id="sendBindCode" class="secondary-auth-button" type="button">获取验证码</button>
+          <input id="bindCode" type="tel" inputmode="numeric" autocomplete="one-time-code" placeholder="短信验证码" required pattern="[0-9]{6}" maxlength="6">
+          <button class="auth-button" type="submit">验证并开始点餐</button>
+        </form>
+        <button id="changeCustomer" class="link-button hidden" type="button">更换手机号</button>
       </section>
 
       <section class="member-panel member-center-panel">
         <div>
           <h2>会员中心</h2>
-          <p id="memberStatus">授权后可加入会员、充值并使用余额支付</p>
+          <p id="memberStatus">绑定后可加入会员、充值并使用余额支付</p>
         </div>
         <div class="member-actions">
           <button id="joinMember" type="button">加入会员</button>
@@ -73,16 +79,20 @@
             </label>
           </fieldset>
           <div id="scheduledPickupFields" class="scheduled-fields hidden span-all">
-            <label>
+            <label class="time-field">
               取餐日期
               <input id="pickupDate" type="date">
             </label>
-            <label>
+            <label class="time-field">
               取餐时间
               <input id="pickupTime" type="time">
             </label>
           </div>
           <div id="deliveryFields" class="delivery-fields hidden span-all">
+            <div class="delivery-location span-all">
+              <span id="deliveryLocationStatus">配送下单需授权定位，以确认在门店 3 公里内</span>
+              <button id="requestDeliveryLocation" type="button">重新定位</button>
+            </div>
             <label class="span-all">
               常用地址
               <select id="savedAddressSelect">
@@ -97,11 +107,11 @@
               <input id="saveDeliveryAddress" type="checkbox" checked>
               保存为常用地址，下次自动带出
             </label>
-            <label>
+            <label class="time-field">
               期望送达日期
               <input id="deliveryDate" type="date">
             </label>
-            <label>
+            <label class="time-field">
               期望送达时间
               <input id="deliveryTime" type="time">
             </label>
@@ -131,12 +141,13 @@
           <option value="alipay_pay">支付宝</option>
           <option value="member_balance">会员余额支付</option>
         </select>
-        <span id="paymentHint" class="payment-hint">微信内完成付款后自动下单</span>
+        <span id="paymentHint" class="payment-hint">内测模拟支付，确认后下单入账</span>
       </label>
       <div class="cart-total">
         <span>合计</span>
         <strong id="cartTotal">¥0.00</strong>
       </div>
+      <div id="deliveryFeeSummary" class="delivery-fee-summary hidden"></div>
       <button id="submitOrder" class="submit-order" type="button">立即付款并下单</button>
       <p id="orderHint"></p>
     </aside>
@@ -150,7 +161,7 @@
         <section class="wallet-panel">
           <div>
             <strong>会员余额</strong>
-            <span id="walletStatus">授权后查看</span>
+            <span id="walletStatus">绑定后查看</span>
           </div>
         </section>
         <div id="historyList" class="history-list empty">请输入手机号后查看订单</div>
@@ -163,10 +174,10 @@
           <h2>会员充值</h2>
           <button id="closeRecharge" type="button">×</button>
         </header>
-        <p id="rechargeHint">充值后可使用会员余额支付订单。</p>
+        <p id="rechargeHint">内测阶段为模拟充值；真实支付接入后，付款成功回调才会增加余额。</p>
         <label>
           充值金额
-          <input id="rechargeAmount" type="number" min="1" step="1" placeholder="例如 100">
+          <input id="rechargeAmount" type="number" inputmode="decimal" min="1" step="1" placeholder="例如 100">
         </label>
         <label>
           充值支付方式

@@ -1,0 +1,16 @@
+<view class="page">
+  <view wx:if="{{orders.length}}" class="orders">
+    <view wx:for="{{orders}}" wx:key="id" class="order-card">
+      <view class="row">
+        <text class="order-no">{{item.orderNo}}</text>
+        <text>{{item.statusText}}</text>
+      </view>
+      <text class="muted">{{item.itemsText}}</text>
+      <view class="row">
+        <text>¥{{item.totalText}}</text>
+        <text>{{item.fulfillmentLabel}}</text>
+      </view>
+    </view>
+  </view>
+  <view wx:else class="empty">暂无订单</view>
+</view>

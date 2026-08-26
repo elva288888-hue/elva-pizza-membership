@@ -1,0 +1,20 @@
+{
+  "pages": [
+    "pages/order/order",
+    "pages/orders/orders"
+  ],
+  "window": {
+    "navigationBarTitleText": "爱娃披萨店自助点餐",
+    "navigationBarBackgroundColor": "#0f8a6b",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f4f5f2"
+  },
+  "style": "v2",
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于确认您是否在门店 3 公里配送范围内"
+    }
+  },
+  "requiredPrivateInfos": ["getLocation", "chooseLocation"],
+  "sitemapLocation": "sitemap.json"
+}

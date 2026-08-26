@@ -1,0 +1,228 @@
+<view class="page">
+  <view wx:if="{{authRequired}}" class="auth-mask">
+    <view class="auth-card">
+      <image class="auth-logo" src="/assets/aiwa-pizza-logo.jpg" mode="aspectFill"></image>
+      <text class="auth-title">欢迎来到爱娃披萨店</text>
+      <text class="auth-copy">{{needsMemberName ? '首次加入会员请填写昵称，再验证手机号用于会员识别和查询订单。' : '欢迎回来，验证手机号后即可继续点餐。'}}</text>
+      <input wx:if="{{needsMemberName}}" class="field auth-name-input" maxlength="20" value="{{memberNameInput}}" placeholder="请输入会员昵称" bindinput="setMemberName"></input>
+      <button class="auth-button" open-type="getPhoneNumber" bindgetphonenumber="joinMember" loading="{{authSubmitting}}" disabled="{{!memberNameInput || authSubmitting}}">手机号授权登录</button>
+      <text class="auth-note">手机号仅用于本店点餐服务</text>
+    </view>
+  </view>
+  <view class="shop-card">
+    <image class="logo" src="/assets/aiwa-pizza-logo.jpg" mode="aspectFill"></image>
+    <view class="shop-copy">
+      <text class="title">爱娃披萨店</text>
+      <text class="subtitle">自助点餐 · 自取或配送</text>
+    </view>
+    <button class="orders-button" size="mini" bindtap="goOrders">我的订单</button>
+  </view>
+
+  <view class="panel">
+    <view class="panel-head">
+      <view>
+        <text class="panel-title">会员中心</text>
+        <text class="panel-subtitle">{{memberText}}</text>
+      </view>
+      <button wx:if="{{!currentMember}}" size="mini" open-type="getPhoneNumber" bindgetphonenumber="joinMember">手机号登录</button>
+      <button wx:else class="recharge-entry" size="mini" bindtap="openRecharge">充值</button>
+    </view>
+  </view>
+
+  <view wx:if="{{rechargeOpen}}" class="recharge-mask" bindtap="closeRecharge">
+    <view class="recharge-dialog" catchtap="noop">
+      <view class="recharge-head">
+        <view>
+          <text class="recharge-title">会员充值</text>
+          <text class="recharge-balance">当前余额 ¥{{currentMember.balanceText}}</text>
+        </view>
+        <button class="recharge-close" bindtap="closeRecharge">×</button>
+      </view>
+
+      <view class="recharge-presets">
+        <button wx:for="{{rechargePresets}}" wx:key="*this" class="{{rechargeAmount == item ? 'selected' : ''}}" data-amount="{{item}}" bindtap="chooseRechargeAmount">¥{{item}}</button>
+      </view>
+
+      <view class="recharge-custom">
+        <text>其他金额</text>
+        <view class="recharge-input-wrap">
+          <text>¥</text>
+          <input type="digit" maxlength="7" value="{{rechargeAmount}}" placeholder="请输入金额" bindinput="setRechargeAmount"></input>
+        </view>
+      </view>
+
+      <text class="recharge-tip">充值金额将通过微信支付，并实时存入会员余额。</text>
+      <button class="recharge-submit" loading="{{rechargeSubmitting}}" disabled="{{rechargeSubmitting}}" bindtap="submitRecharge">微信支付充值 ¥{{rechargeAmount || '0'}}</button>
+    </view>
+  </view>
+
+  <view class="panel">
+    <text class="panel-title">取餐方式</text>
+    <view class="segmented">
+      <button class="{{fulfillmentType === 'pickup' ? 'active' : ''}}" data-type="pickup" bindtap="setFulfillment">到店取餐</button>
+      <button class="{{fulfillmentType === 'delivery' ? 'active' : ''}}" data-type="delivery" bindtap="setFulfillment">配送</button>
+    </view>
+
+    <view wx:if="{{fulfillmentType === 'pickup'}}">
+      <view class="segmented">
+        <button class="{{pickupMode === 'now' ? 'active' : ''}}" data-mode="now" bindtap="setPickupMode">即时取餐</button>
+        <button class="{{pickupMode === 'scheduled' ? 'active' : ''}}" data-mode="scheduled" bindtap="setPickupMode">预约取餐</button>
+      </view>
+      <view wx:if="{{pickupMode === 'scheduled'}}" class="field-row">
+        <picker mode="date" bindchange="setPickupDate">
+          <view class="field">{{pickupDate || '选择取餐日期'}}</view>
+        </picker>
+        <picker mode="time" bindchange="setPickupTime">
+          <view class="field">{{pickupTime || '选择取餐时间'}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <view wx:if="{{fulfillmentType === 'delivery'}}" class="field-column">
+      <view wx:if="{{deliverySettings.testMode}}" class="delivery-test-warning">当前为临时配送测试模式，请勿作为正式配送依据</view>
+      <view class="delivery-scope-notice">
+        <text class="delivery-scope-title">配送范围特别提醒</text>
+        <text>请注意：配送范围仅限3公里内滨河村各小区及周边社区，其他地区暂时无法配送，带来不便敬请谅解。</text>
+      </view>
+      <view class="delivery-location">
+        <text>{{locationStatus}}</text>
+        <button size="mini" bindtap="requestDeliveryLocation">重新定位</button>
+      </view>
+      <view class="delivery-form">
+        <label class="delivery-field delivery-field-wide">
+          <text>详细地址</text>
+          <input value="{{deliveryAddress}}" placeholder="楼栋、单元、门牌号" bindinput="setDeliveryAddress"></input>
+        </label>
+        <label class="delivery-field">
+          <text>收货人</text>
+          <input maxlength="20" value="{{deliveryRecipientName}}" placeholder="姓名" bindinput="setDeliveryRecipientName"></input>
+        </label>
+        <label class="delivery-field">
+          <text>联系电话</text>
+          <input type="number" maxlength="11" value="{{deliveryRecipientPhone}}" placeholder="可与会员手机号不同" bindinput="setDeliveryRecipientPhone"></input>
+        </label>
+      </view>
+      <checkbox-group class="delivery-confirm" bindchange="setDeliveryAreaConfirmed">
+        <label>
+          <checkbox value="confirmed" checked="{{deliveryAreaConfirmed}}" color="#0f8a6b"></checkbox>
+          <text>我已确认该地址位于上述可配送区域</text>
+        </label>
+      </checkbox-group>
+      <view class="delivery-form delivery-time-grid">
+        <picker mode="date" bindchange="setDeliveryDate">
+          <view class="delivery-field picker-field"><text>送达日期</text><strong>{{deliveryDate || '请选择'}}</strong></view>
+        </picker>
+        <picker mode="time" bindchange="setDeliveryTime">
+          <view class="delivery-field picker-field"><text>送达时间</text><strong>{{deliveryTime || '请选择'}}</strong></view>
+        </picker>
+      </view>
+    </view>
+  </view>
+
+  <scroll-view class="tabs" scroll-x enable-flex show-scrollbar="{{false}}">
+    <view class="tabs-track">
+      <button wx:for="{{categories}}" wx:key="name" class="{{activeCategory === item.name ? 'active' : ''}}" data-name="{{item.name}}" bindtap="setCategory">{{item.name}}</button>
+    </view>
+  </scroll-view>
+
+  <view class="products">
+    <view wx:for="{{visibleProducts}}" wx:key="id" class="product-card">
+      <image wx:if="{{item.image}}" class="product-image" src="{{item.image}}" mode="aspectFill"></image>
+      <view wx:else class="product-placeholder">{{item.name.slice(0, 1)}}</view>
+      <view class="product-main">
+        <text class="product-name">{{item.name}}</text>
+        <text class="product-desc">{{item.description}}</text>
+        <text class="price">¥{{item.priceText}}</text>
+      </view>
+      <button
+        class="add-button {{addedProductId === item.id ? 'added' : ''}}"
+        data-id="{{item.id}}"
+        data-feedback="true"
+        bindtap="addToCart"
+      >
+        <text wx:if="{{cart[item.id]}}">已选 {{cart[item.id]}} 件</text>
+        <text wx:else>加入购物车</text>
+      </button>
+    </view>
+  </view>
+
+  <view wx:if="{{cartExpanded}}" class="cart-mask" bindtap="closeCart"></view>
+
+  <view class="cart {{cartExpanded ? 'cart-expanded' : ''}}">
+    <view wx:if="{{cartExpanded}}" class="cart-details">
+      <view class="cart-detail-head">
+        <view>
+          <text class="cart-title">已选商品</text>
+          <text class="cart-caption">共 {{cartCount}} 件</text>
+        </view>
+        <button class="close-cart" bindtap="closeCart">收起</button>
+      </view>
+
+      <scroll-view wx:if="{{cartRows.length}}" class="cart-list" scroll-y>
+        <view wx:for="{{cartRows}}" wx:key="product.id" class="cart-row">
+          <view class="cart-product">
+            <text class="cart-product-name">{{item.product.name}}</text>
+            <text class="muted">¥{{item.product.priceText}}</text>
+          </view>
+          <view class="stepper">
+            <button data-id="{{item.product.id}}" bindtap="decreaseCart">−</button>
+            <text>{{item.quantity}}</text>
+            <button data-id="{{item.product.id}}" bindtap="addToCart">＋</button>
+          </view>
+        </view>
+      </scroll-view>
+      <view wx:else class="cart-empty">还没有选择商品</view>
+
+      <view class="checkout-options">
+        <view wx:if="{{fulfillmentType === 'delivery'}}" class="delivery-fee-row">
+          <text>配送费</text>
+          <text wx:if="{{deliveryFee}}">¥{{deliveryFeeText}}</text>
+          <text wx:else class="fee-waived">已减免</text>
+        </view>
+        <text wx:if="{{deliveryFeeHint}}" class="delivery-fee-hint">{{deliveryFeeHint}}</text>
+        <view class="note-row">
+          <text class="option-label">备注</text>
+          <input class="note-input" maxlength="80" placeholder="口味、餐具等要求（选填）" value="{{orderNote}}" bindinput="setOrderNote"></input>
+        </view>
+        <radio-group class="pay-methods" bindchange="setPaymentMethod">
+          <text class="option-label">支付</text>
+          <label class="pay-option {{paymentMethod === 'wechat_pay' ? 'selected' : ''}}">
+            <radio value="wechat_pay" checked="{{paymentMethod === 'wechat_pay'}}"></radio>
+            <text>微信支付</text>
+          </label>
+          <label class="pay-option {{paymentMethod === 'member_balance' ? 'selected' : ''}}">
+            <radio value="member_balance" checked="{{paymentMethod === 'member_balance'}}"></radio>
+            <text>会员余额</text>
+          </label>
+        </radio-group>
+      </view>
+    </view>
+
+    <view class="checkout-bar">
+      <button wx:if="{{!cartExpanded}}" class="cart-summary" bindtap="toggleCart">
+        <view class="cart-badge">{{cartCount}}</view>
+        <view class="summary-copy">
+          <text class="summary-title">{{cartCount ? '购物车详情' : '购物车为空'}}</text>
+          <text class="summary-hint">{{cartCount ? '商品、备注与支付方式' : '请先选择商品'}}</text>
+        </view>
+        <view wx:if="{{cartCount}}" class="cart-detail-entry">展开明细</view>
+      </button>
+      <view class="checkout-total">
+        <text class="total-label">合计</text>
+        <text class="price">¥{{payableTotalText}}</text>
+      </view>
+      <button class="submit {{!cartCount ? 'disabled' : ''}}" disabled="{{!cartCount}}" bindtap="submitOrder">去结算</button>
+    </view>
+  </view>
+
+  <view wx:if="{{orderSuccessOpen}}" class="success-mask" catchtouchmove="noop">
+    <view class="success-card">
+      <view class="success-badge">订单已提交</view>
+      <text class="success-title">下单成功</text>
+      <text wx:if="{{orderSuccessNo}}" class="success-order-no">订单号 {{orderSuccessNo}}</text>
+      <text class="success-copy">{{orderSuccessMessage}}</text>
+      <button class="success-primary" bindtap="viewSuccessfulOrder">查看我的订单</button>
+      <button class="success-secondary" bindtap="closeOrderSuccess">继续点餐</button>
+    </view>
+  </view>
+</view>

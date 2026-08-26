@@ -36,11 +36,19 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .hidden {
   display: none !important;
 }
 
 .login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   display: grid;
   min-height: 100vh;
   place-items: center;
@@ -86,14 +94,45 @@ button {
 }
 
 .code-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
   align-items: end;
   gap: 10px;
 }
 
+.code-row label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.send-code-button {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  min-width: 132px;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
 .login-hint {
+  min-height: 20px;
+  padding: 7px 10px;
+  border-radius: 6px;
   font-size: 13px;
+}
+
+.login-hint.is-loading {
+  color: #7a4307;
+  background: #fff0d8;
+}
+
+.login-hint.is-success {
+  color: var(--accent-dark);
+  background: #ddf5ed;
+}
+
+.login-hint.is-error {
+  color: var(--danger);
+  background: #ffe6e3;
 }
 
 .app-shell {
@@ -388,6 +427,7 @@ textarea {
 .primary-button {
   padding: 0 16px;
   color: white;
+  background: #0f8a6b;
   background: var(--accent);
   font-weight: 700;
 }
@@ -401,6 +441,12 @@ textarea {
   color: inherit;
   background: transparent;
   border: 1px solid currentColor;
+}
+
+.login-card .ghost-button {
+  color: #25312d;
+  background: #ffffff;
+  border-color: #25312d;
 }
 
 .text-button {
@@ -510,6 +556,11 @@ textarea {
 .status-pill.ready {
   color: var(--accent-dark);
   background: #ddf5ed;
+}
+
+.status-pill.delivering {
+  color: #145c8d;
+  background: #dff1ff;
 }
 
 .status-pill.completed {
@@ -732,6 +783,82 @@ tr:last-child td {
   max-width: 760px;
 }
 
+.panel-description {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.switch-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.switch-control input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: #b8bcb9;
+  transition: background 160ms ease;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+  transition: transform 160ms ease;
+}
+
+.switch-control input:checked + .switch-track {
+  background: var(--accent);
+}
+
+.switch-control input:checked + .switch-track::after {
+  transform: translateX(20px);
+}
+
+.switch-control input:focus-visible + .switch-track {
+  outline: 3px solid rgba(15, 143, 108, 0.2);
+  outline-offset: 2px;
+}
+
+.alert-setting-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.setting-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.setting-status.is-ready {
+  color: var(--accent);
+}
+
+.setting-status.is-warning {
+  color: #a65a00;
+}
+
 .rule-list {
   display: grid;
   gap: 10px;
@@ -840,12 +967,47 @@ tr:last-child td {
 }
 
 .receipt {
-  width: 72mm;
-  padding: 6mm 4mm;
+  width: 54mm;
+  padding: 4mm 2mm;
+  box-sizing: border-box;
   color: #111;
   background: #fff;
   font-family: "Courier New", "PingFang SC", monospace;
   font-size: 12px;
+}
+
+.receipt-order-head,
+.receipt-order-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8mm 14mm;
+  gap: 2mm;
+  align-items: start;
+}
+
+.receipt-order-head {
+  color: #444;
+}
+
+.receipt-order-head span:nth-child(n + 2),
+.receipt-order-item span:nth-child(2),
+.receipt-order-item strong {
+  text-align: right;
+}
+
+.receipt-order-items {
+  display: grid;
+  gap: 2mm;
+  margin-top: 2mm;
+}
+
+.receipt-order-item span:first-child,
+.receipt-note {
+  overflow-wrap: anywhere;
+}
+
+.receipt-note {
+  margin-top: 3mm;
+  line-height: 1.55;
 }
 
 .receipt-logo {
@@ -956,6 +1118,14 @@ tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  .code-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .send-code-button {
+    width: 100%;
+  }
   .brand-logo {
     width: 46px;
     height: 46px;
@@ -1012,7 +1182,7 @@ tr:last-child td {
 
 @media print {
   @page {
-    size: 80mm auto;
+    size: 58mm 200mm;
     margin: 0;
   }
 
@@ -1034,7 +1204,7 @@ tr:last-child td {
     position: absolute;
     inset: 0 auto auto 0;
     display: block;
-    width: 80mm;
+    width: 58mm;
     margin: 0;
     padding: 0;
   }

@@ -1,0 +1,16 @@
+{
+  "description": "Aiwa Pizza self ordering mini program",
+  "appid": "wx7d5ec34bff1ac7dc",
+  "projectname": "aiwa-pizza-ordering",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "postcss": true,
+    "minified": true,
+    "minifyWXML": true,
+    "enhance": true
+  }
+}

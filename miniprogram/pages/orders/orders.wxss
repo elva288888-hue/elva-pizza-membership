@@ -1,0 +1,39 @@
+.page {
+  padding: 24rpx;
+}
+
+.orders {
+  display: grid;
+  gap: 18rpx;
+}
+
+.order-card {
+  display: grid;
+  gap: 14rpx;
+  border: 1rpx solid #dfe6df;
+  border-radius: 16rpx;
+  padding: 22rpx;
+  background: #fff;
+  box-shadow: 0 12rpx 36rpx rgba(35, 47, 42, 0.08);
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.order-no {
+  color: #08775d;
+  font-weight: 900;
+}
+
+.muted,
+.empty {
+  color: #63716b;
+}
+
+.empty {
+  padding: 80rpx 0;
+  text-align: center;
+}

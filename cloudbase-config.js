@@ -25,4 +25,15 @@ window.AIWA_CLOUDBASE_CONFIG = {
   functions: {
     membershipApi: "membershipApi",
   },
+  payments: {
+    mode: "mock",
+    h5Wechat: {
+      enabled: false,
+      provider: "",
+    },
+    h5Alipay: {
+      enabled: false,
+      provider: "",
+    },
+  },
 };

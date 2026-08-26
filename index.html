@@ -4,10 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>爱娃披萨店自助点餐系统</title>
-    <link rel="stylesheet" href="styles.css?v=20260706-2">
-    <script defer src="https://static.cloudbase.net/cloudbase-js-sdk/1.8.1/cloudbase.full.js"></script>
-    <script defer src="cloudbase-config.js?v=20260706-1"></script>
-    <script defer src="app.js?v=20260706-2"></script>
+    <link rel="stylesheet" href="styles.css?v=20260824-2">
+    <script defer src="cloudbase-sdk.js?v=20260804-1"></script>
+    <script defer src="cloudbase-config.js?v=20260721-7"></script>
+    <script defer src="compatibility.js?v=20260807-2"></script>
+    <script defer src="app-compat.js?v=20260825-5"></script>
   </head>
   <body>
     <section id="loginScreen" class="login-screen">
@@ -23,13 +24,13 @@
           <div class="code-row">
             <label>
               验证码
-              <input id="loginCode" type="text" inputmode="numeric" placeholder="测试验证码 123456" required>
+              <input id="loginCode" type="text" inputmode="numeric" placeholder="请输入短信验证码" required>
             </label>
-            <button id="sendCode" class="ghost-button" type="button">获取验证码</button>
+            <button id="sendCode" class="ghost-button send-code-button" type="button" aria-describedby="loginHint">获取验证码</button>
           </div>
-          <button class="primary-button" type="submit">登录</button>
+          <button id="loginSubmit" class="primary-button" type="submit">登录</button>
         </form>
-        <p id="loginHint" class="login-hint">测试阶段验证码固定为 123456，正式上线后接入腾讯云短信。</p>
+        <p id="loginHint" class="login-hint" role="status" aria-live="polite">验证码将发送到已登记的店员手机号。</p>
       </div>
     </section>
 
@@ -58,7 +59,7 @@
             <strong id="currentStaffName">未登录</strong>
           </div>
           <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
-          <button id="exportData" class="ghost-button" type="button">导出数据</button>
+          <button id="exportData" class="ghost-button" type="button">导出流水 Excel</button>
           <label class="import-label">
             导入数据
             <input id="importData" type="file" accept="application/json">
@@ -73,8 +74,6 @@
             <h2 id="pageTitle">总览</h2>
           </div>
           <div class="topbar-actions">
-            <a class="ghost-link" href="mobile-test.html" target="_blank" rel="noreferrer">手机扫码测试</a>
-            <a class="ghost-link" href="customer.html?local=1&mockAuth=1" target="_blank" rel="noreferrer">打开消费者点餐端</a>
             <button id="addMemberTop" class="primary-button" type="button">新增会员</button>
           </div>
         </header>
@@ -170,9 +169,11 @@
             <input id="orderSearch" class="search-input" type="search" placeholder="搜索订单号、姓名、手机号、商品">
             <select id="orderStatusFilter" class="filter-select">
               <option value="all">全部状态</option>
+              <option value="pending_payment">待支付</option>
               <option value="pending">待接单</option>
               <option value="making">制作中</option>
               <option value="ready">待取餐</option>
+              <option value="delivering">配送中</option>
               <option value="completed">已完成</option>
               <option value="cancelled">已取消</option>
               <option value="refunded">已退款</option>
@@ -244,6 +245,60 @@
         <section id="settingsView" class="view" aria-labelledby="pageTitle">
           <section class="panel settings-panel">
             <div class="panel-head">
+              <div>
+                <h3>新订单提醒</h3>
+                <p class="panel-description">新订单进入后台时播放提示音；待接单超过一分钟会再次提醒。</p>
+              </div>
+              <label class="switch-control">
+                <input id="orderSoundEnabled" type="checkbox" checked>
+                <span class="switch-track" aria-hidden="true"></span>
+                <span>声音提醒</span>
+              </label>
+            </div>
+            <div class="alert-setting-actions">
+              <button id="testOrderSound" class="ghost-button" type="button">试听提示音</button>
+              <p id="orderSoundStatus" class="setting-status" role="status" aria-live="polite">声音提醒默认开启</p>
+            </div>
+          </section>
+
+          <section class="panel settings-panel">
+            <div class="panel-head">
+              <div>
+                <h3>配送设置</h3>
+                <p class="panel-description">顾客定位在门店 3 公里内才可下单；商品满额自动免配送费。</p>
+              </div>
+            </div>
+            <form id="deliverySettingsForm" class="form-grid">
+              <label>
+                配送费（元）
+                <input id="deliveryFee" type="number" min="0" step="0.01" required>
+              </label>
+              <label>
+                免配送费门槛（元）
+                <input id="freeDeliveryThreshold" type="number" min="0" step="0.01" required>
+              </label>
+              <label>
+                门店纬度
+                <input id="storeLatitude" type="number" min="-90" max="90" step="0.000001" placeholder="例如 31.230416" required>
+              </label>
+              <label>
+                门店经度
+                <input id="storeLongitude" type="number" min="-180" max="180" step="0.000001" placeholder="例如 121.473701" required>
+              </label>
+              <label class="switch-control span-2">
+                <input id="deliveryTestMode" type="checkbox">
+                <span class="switch-track" aria-hidden="true"></span>
+                <span>临时测试模式（允许使用北京等非门店坐标）</span>
+              </label>
+              <button id="locateStore" class="ghost-button" type="button">使用门店当前位置</button>
+              <button class="primary-button" type="submit">保存配送设置</button>
+              <a id="verifyStoreLocation" class="ghost-button span-2" href="#" target="_blank" rel="noopener" hidden>在高德地图中核对这个位置</a>
+              <p id="deliverySettingsStatus" class="setting-status span-2" role="status" aria-live="polite"></p>
+            </form>
+          </section>
+
+          <section class="panel settings-panel" data-manager-only hidden>
+            <div class="panel-head">
               <h3>充值赠送规则</h3>
             </div>
             <form id="bonusRuleForm" class="form-grid">
@@ -260,7 +315,7 @@
             <div id="bonusRuleList" class="rule-list empty-state">暂无赠送规则</div>
           </section>
 
-          <section class="panel settings-panel">
+          <section class="panel settings-panel" data-manager-only hidden>
             <div class="panel-head">
               <h3>店员管理</h3>
             </div>
@@ -292,7 +347,7 @@
       <form id="memberForm" method="dialog">
         <div class="dialog-head">
           <h3 id="memberDialogTitle">新增会员</h3>
-          <button class="icon-button" value="cancel" type="submit" aria-label="关闭">×</button>
+          <button class="icon-button" data-dialog-close value="cancel" type="submit" formnovalidate aria-label="关闭">×</button>
         </div>
         <input id="memberId" type="hidden">
         <label>
@@ -316,7 +371,7 @@
           <textarea id="memberNote" rows="3" placeholder="例如 常点少糖"></textarea>
         </label>
         <div class="dialog-actions">
-          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button class="ghost-button" data-dialog-close value="cancel" type="submit" formnovalidate>取消</button>
           <button id="saveMember" class="primary-button" value="default" type="button">保存会员</button>
         </div>
       </form>
@@ -326,7 +381,7 @@
       <form id="productForm" method="dialog">
         <div class="dialog-head">
           <h3 id="productDialogTitle">新增商品</h3>
-          <button class="icon-button" value="cancel" type="submit" aria-label="关闭">×</button>
+          <button class="icon-button" data-dialog-close value="cancel" type="submit" formnovalidate aria-label="关闭">×</button>
         </div>
         <input id="productId" type="hidden">
         <label>
@@ -360,7 +415,7 @@
           上架销售
         </label>
         <div class="dialog-actions">
-          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button class="ghost-button" data-dialog-close value="cancel" type="submit" formnovalidate>取消</button>
           <button id="saveProduct" class="primary-button" value="default" type="button">保存商品</button>
         </div>
       </form>
@@ -370,7 +425,7 @@
       <form id="refundForm" method="dialog">
         <div class="dialog-head">
           <h3>处理退款/退货</h3>
-          <button class="icon-button" value="cancel" type="submit" aria-label="关闭">×</button>
+          <button class="icon-button" data-dialog-close value="cancel" type="submit" formnovalidate aria-label="关闭">×</button>
         </div>
         <input id="refundOrderId" type="hidden">
         <label>
@@ -380,6 +435,7 @@
         <label>
           处理方式
           <select id="refundMethod">
+            <option value="wechat_pay">微信支付原路退回</option>
             <option value="member_balance">退回会员余额</option>
             <option value="cash">现金/线下退款</option>
             <option value="manual">手动记录</option>
@@ -390,7 +446,7 @@
           <textarea id="refundReason" rows="3" placeholder="例如 顾客取消、缺货、换货差价" required></textarea>
         </label>
         <div class="dialog-actions">
-          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button class="ghost-button" data-dialog-close value="cancel" type="submit" formnovalidate>取消</button>
           <button id="confirmRefund" class="primary-button" value="default" type="button">确认退款</button>
         </div>
       </form>
@@ -408,6 +464,33 @@
           <button id="confirmReceiptPrint" class="primary-button" type="button">打印</button>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="memberPrintDialog" class="dialog">
+      <form id="memberPrintForm" method="dialog">
+        <div class="dialog-head">
+          <h3 id="memberPrintTitle">选择会员交易日期</h3>
+          <button class="icon-button" value="cancel" type="submit" formnovalidate aria-label="关闭">×</button>
+        </div>
+        <input id="memberPrintId" type="hidden">
+        <label>
+          开始日期
+          <input id="memberPrintStartDate" type="date" required>
+        </label>
+        <label>
+          结束日期
+          <input id="memberPrintEndDate" type="date" required>
+        </label>
+        <label class="checkbox-label">
+          <input id="memberPrintAllDates" type="checkbox">
+          打印全部历史交易
+        </label>
+        <p class="field-hint">默认打印最近 30 天；合计金额也只统计所选日期范围。</p>
+        <div class="dialog-actions">
+          <button class="ghost-button" value="cancel" type="submit" formnovalidate>取消</button>
+          <button class="primary-button" value="default" type="submit">生成预览</button>
+        </div>
+      </form>
     </dialog>
 
     <section id="receiptPrintArea" class="receipt-print" aria-hidden="true"></section>

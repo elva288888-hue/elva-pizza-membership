@@ -1,5 +1,7 @@
 const STORAGE_KEY = "aiwa_drink_membership_v1";
 const CUSTOMER_SESSION_KEY = "aiwa_customer_session_v1";
+const CUSTOMER_COOKIE_KEY = "aiwa_customer_identity";
+const CLOUDBASE_SDK_URL = "https://esm.sh/@cloudbase/js-sdk@2.9.6?bundle&target=es2019";
 const cloudConfig = window.AIWA_CLOUDBASE_CONFIG || {};
 const urlParams = new URLSearchParams(window.location.search);
 let localRefreshTimer = null;
@@ -16,7 +18,8 @@ const state = {
   products: [],
   orders: [],
   refunds: [],
-  settings: { bonusRules: [] },
+  settings: { bonusRules: [], delivery: { fee: 5, freeThreshold: 58, maxDistanceKm: 3, storeLatitude: null, storeLongitude: null, testMode: false } },
+  deliveryLocation: null,
   cart: {},
   activeCategory: "全部",
   currentMember: null,
@@ -26,7 +29,12 @@ const state = {
 const els = {
   authStatus: document.querySelector("#authStatus"),
   syncStatus: document.querySelector("#syncStatus"),
-  authorizeCustomer: document.querySelector("#authorizeCustomer"),
+  phoneBindForm: document.querySelector("#phoneBindForm"),
+  bindName: document.querySelector("#bindName"),
+  bindPhone: document.querySelector("#bindPhone"),
+  sendBindCode: document.querySelector("#sendBindCode"),
+  bindCode: document.querySelector("#bindCode"),
+  changeCustomer: document.querySelector("#changeCustomer"),
   fulfillmentTypes: document.querySelectorAll('input[name="fulfillmentType"]'),
   pickupModes: document.querySelectorAll('input[name="pickupMode"]'),
   pickupFields: document.querySelector("#pickupFields"),
@@ -39,6 +47,8 @@ const els = {
   saveDeliveryAddress: document.querySelector("#saveDeliveryAddress"),
   deliveryDate: document.querySelector("#deliveryDate"),
   deliveryTime: document.querySelector("#deliveryTime"),
+  deliveryLocationStatus: document.querySelector("#deliveryLocationStatus"),
+  requestDeliveryLocation: document.querySelector("#requestDeliveryLocation"),
   memberStatus: document.querySelector("#memberStatus"),
   joinMember: document.querySelector("#joinMember"),
   openRecharge: document.querySelector("#openRecharge"),
@@ -57,6 +67,7 @@ const els = {
   paymentMethod: document.querySelector("#paymentMethod"),
   paymentHint: document.querySelector("#paymentHint"),
   cartTotal: document.querySelector("#cartTotal"),
+  deliveryFeeSummary: document.querySelector("#deliveryFeeSummary"),
   submitOrder: document.querySelector("#submitOrder"),
   orderHint: document.querySelector("#orderHint"),
   historyToggle: document.querySelector("#historyToggle"),
@@ -104,8 +115,9 @@ async function callLocalApi(method, data) {
 
 async function initCloudBase() {
   if (cloudConfig.localApi) return;
-  if (!cloudConfig.enabled || !window.cloudbase || !cloudConfig.envId) return;
+  if (!cloudConfig.enabled || !cloudConfig.envId) return;
   try {
+    await loadCloudBaseSdk();
     state.cloud.app = window.cloudbase.init({ env: cloudConfig.envId });
     const auth = state.cloud.app.auth();
     if (auth?.anonymousAuthProvider) {
@@ -115,6 +127,14 @@ async function initCloudBase() {
   } catch (error) {
     console.warn("[CloudBase customer]", error);
   }
+}
+
+async function loadCloudBaseSdk() {
+  if (window.cloudbase) return window.cloudbase;
+  const module = await import(CLOUDBASE_SDK_URL);
+  window.cloudbase = module.default || window.cloudbase;
+  if (!window.cloudbase) throw new Error("CloudBase SDK load failed");
+  return window.cloudbase;
 }
 
 async function callCloud(action, payload = {}) {
@@ -158,11 +178,34 @@ function loadCustomerSession() {
     saveCustomerSession();
     return;
   }
+  const urlPhone = normalizePhone(urlParams.get("phone"));
+  if (urlPhone) {
+    state.customerProfile = createCustomerProfile({
+      name: urlParams.get("name") || savedProfile?.name || "微信顾客",
+      phone: urlPhone,
+      openid: urlParams.get("openid") || savedProfile?.openid || "",
+      source: "url_phone",
+      phoneVerified: savedProfile?.phone === urlPhone && savedProfile?.phoneVerified,
+      phoneVerifiedAt: savedProfile?.phone === urlPhone ? savedProfile?.phoneVerifiedAt : "",
+      addresses: savedProfile?.phone === urlPhone ? savedProfile.addresses : [],
+    });
+    if (state.customerProfile.phoneVerified) saveCustomerSession();
+    return;
+  }
 
   state.customerProfile = savedProfile;
+  if (state.customerProfile?.phone && state.customerProfile?.phoneVerified) {
+    persistCustomerIdentityInUrl();
+  }
 }
 
 function readCustomerSession() {
+  const fromLocalStorage = readCustomerSessionFromLocalStorage();
+  if (fromLocalStorage) return fromLocalStorage;
+  return readCustomerSessionFromCookie();
+}
+
+function readCustomerSessionFromLocalStorage() {
   try {
     return normalizeCustomerProfile(JSON.parse(localStorage.getItem(CUSTOMER_SESSION_KEY)) || null);
   } catch {
@@ -170,10 +213,58 @@ function readCustomerSession() {
   }
 }
 
+function readCustomerSessionFromCookie() {
+  const cookie = document.cookie
+    .split("; ")
+    .find((item) => item.startsWith(`${CUSTOMER_COOKIE_KEY}=`));
+  if (!cookie) return null;
+  try {
+    return normalizeCustomerProfile(JSON.parse(decodeURIComponent(cookie.split("=").slice(1).join("="))) || null);
+  } catch {
+    return null;
+  }
+}
+
 function saveCustomerSession() {
   if (state.customerProfile) {
-    localStorage.setItem(CUSTOMER_SESSION_KEY, JSON.stringify(state.customerProfile));
+    const serialized = JSON.stringify(state.customerProfile);
+    try {
+      localStorage.setItem(CUSTOMER_SESSION_KEY, serialized);
+    } catch {
+      // Some embedded browsers restrict localStorage; cookie and URL remain as fallbacks.
+    }
+    document.cookie = `${CUSTOMER_COOKIE_KEY}=${encodeURIComponent(serialized)}; max-age=31536000; path=/; SameSite=Lax`;
+    persistCustomerIdentityInUrl();
   }
+}
+
+function persistCustomerIdentityInUrl() {
+  if (!state.customerProfile?.phone || !window.history?.replaceState) return;
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set("phone", state.customerProfile.phone);
+  nextUrl.searchParams.set("name", state.customerProfile.name || "");
+  nextUrl.searchParams.delete("mockAuth");
+  window.history.replaceState({}, "", nextUrl.toString());
+}
+
+function clearCustomerSession() {
+  try {
+    localStorage.removeItem(CUSTOMER_SESSION_KEY);
+  } catch {
+    // Ignore storage cleanup failures in embedded browsers.
+  }
+  document.cookie = `${CUSTOMER_COOKIE_KEY}=; max-age=0; path=/; SameSite=Lax`;
+  if (window.history?.replaceState) {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete("phone");
+    nextUrl.searchParams.delete("name");
+    nextUrl.searchParams.delete("openid");
+    window.history.replaceState({}, "", nextUrl.toString());
+  }
+}
+
+function hasVerifiedCustomer() {
+  return Boolean(state.customerProfile?.phone && state.customerProfile?.phoneVerified);
 }
 
 function normalizeCustomerProfile(profile) {
@@ -181,6 +272,8 @@ function normalizeCustomerProfile(profile) {
   return {
     ...profile,
     phone: normalizePhone(profile.phone),
+    phoneVerified: Boolean(profile.phoneVerified),
+    phoneVerifiedAt: profile.phoneVerifiedAt || "",
     addresses: normalizeAddresses(profile.addresses),
   };
 }
@@ -197,23 +290,121 @@ function normalizeAddresses(addresses) {
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
-function createMockCustomerProfile() {
+function createCustomerProfile({
+  name,
+  phone,
+  openid = "",
+  source = "h5_phone",
+  phoneVerified = false,
+  phoneVerifiedAt = "",
+  addresses = [],
+} = {}) {
+  const normalizedPhone = normalizePhone(phone);
   return {
-    openid: urlParams.get("openid") || "mock_openid_001",
-    name: urlParams.get("name") || "微信顾客",
-    phone: normalizePhone(urlParams.get("phone") || "13900001111"),
+    openid: openid || `h5_phone_${normalizedPhone}`,
+    name: String(name || "微信顾客").trim() || "微信顾客",
+    phone: normalizedPhone,
+    phoneVerified: Boolean(phoneVerified),
+    phoneVerifiedAt,
     avatar: "",
-    addresses: [],
+    addresses: normalizeAddresses(addresses),
     authorizedAt: new Date().toISOString(),
-    source: "local_mock",
+    source,
   };
 }
 
-function authorizeCustomer() {
-  state.customerProfile = createMockCustomerProfile();
+function createMockCustomerProfile() {
+  return createCustomerProfile({
+    openid: urlParams.get("openid") || "mock_openid_001",
+    name: urlParams.get("name") || "微信顾客",
+    phone: normalizePhone(urlParams.get("phone") || "13900001111"),
+    phoneVerified: true,
+    phoneVerifiedAt: new Date().toISOString(),
+    source: "local_mock",
+  });
+}
+
+function readBindFields() {
+  const phone = normalizePhone(els.bindPhone.value);
+  const name = String(els.bindName.value || "").trim();
+  if (!name) {
+    els.orderHint.textContent = "请输入称呼，方便店家识别订单。";
+    els.bindName.focus();
+    return null;
+  }
+  if (!/^1\d{10}$/.test(phone)) {
+    els.orderHint.textContent = "请输入 11 位手机号，用于匹配会员余额和订单。";
+    els.bindPhone.focus();
+    return null;
+  }
+  return { name, phone };
+}
+
+async function sendCustomerBindCode() {
+  const fields = readBindFields();
+  if (!fields) return;
+  if (!state.cloud.ready) {
+    els.orderHint.textContent = "验证码需要连接云端，请刷新页面后再试。";
+    return;
+  }
+  els.sendBindCode.disabled = true;
+  els.sendBindCode.textContent = "发送中";
+  try {
+    const result = await callCloud("sendCustomerBindCode", { phone: fields.phone });
+    els.orderHint.textContent = result.message || "验证码已发送，请查看手机短信。";
+    els.bindCode.focus();
+  } catch (error) {
+    els.orderHint.textContent = error.message || "验证码发送失败，请稍后再试。";
+  } finally {
+    els.sendBindCode.disabled = false;
+    els.sendBindCode.textContent = "获取验证码";
+  }
+}
+
+async function bindCustomerPhone(event) {
+  event.preventDefault();
+  const fields = readBindFields();
+  if (!fields) return;
+  const code = String(els.bindCode.value || "").trim();
+  if (!/^\d{6}$/.test(code)) {
+    els.orderHint.textContent = "请输入 6 位短信验证码。";
+    els.bindCode.focus();
+    return;
+  }
+  if (!state.cloud.ready) {
+    els.orderHint.textContent = "手机号验证需要连接云端，请刷新页面后再试。";
+    return;
+  }
+  els.orderHint.textContent = "正在验证手机号...";
+  let verifiedAt = "";
+  try {
+    const result = await callCloud("verifyCustomerBindCode", { phone: fields.phone, code });
+    verifiedAt = result.verifiedAt || new Date().toISOString();
+  } catch (error) {
+    els.orderHint.textContent = error.message || "验证码不正确或已过期。";
+    return;
+  }
+  const previous = readCustomerSession();
+  state.customerProfile = createCustomerProfile({
+    name: fields.name,
+    phone: fields.phone,
+    phoneVerified: true,
+    phoneVerifiedAt: verifiedAt,
+    addresses: previous?.phone === fields.phone ? previous.addresses : [],
+  });
   saveCustomerSession();
   render();
-  els.orderHint.textContent = "已完成本地模拟授权，可以开始点餐。";
+  els.orderHint.textContent = "手机号已验证，可以开始点餐。";
+}
+
+function changeCustomerPhone() {
+  state.customerProfile = null;
+  clearCustomerSession();
+  els.bindName.value = "";
+  els.bindPhone.value = "";
+  els.bindCode.value = "";
+  render();
+  els.orderHint.textContent = "请重新绑定手机号。";
 }
 
 async function syncFromCloud() {
@@ -305,7 +496,25 @@ function applyData(data) {
   state.products = normalizeProducts(data.products, storeId);
   state.orders = normalizeOrders(data.orders, storeId);
   state.refunds = Array.isArray(data.refunds) ? data.refunds : [];
-  state.settings = data.settings || { bonusRules: [] };
+  state.settings = normalizeSettings(data.settings);
+}
+
+function normalizeSettings(settings = {}) {
+  const delivery = settings.delivery || {};
+  const coordinate = (value) => value === null || value === undefined || value === "" ? null : Number(value);
+  const latitude = coordinate(delivery.storeLatitude);
+  const longitude = coordinate(delivery.storeLongitude);
+  return {
+    bonusRules: Array.isArray(settings.bonusRules) ? settings.bonusRules : [],
+    delivery: {
+      fee: Math.max(0, Number.isFinite(Number(delivery.fee)) ? Number(delivery.fee) : 5),
+      freeThreshold: Math.max(0, Number.isFinite(Number(delivery.freeThreshold)) ? Number(delivery.freeThreshold) : 58),
+      maxDistanceKm: 3,
+      storeLatitude: Number.isFinite(latitude) ? latitude : null,
+      storeLongitude: Number.isFinite(longitude) ? longitude : null,
+      testMode: delivery.testMode === true,
+    },
+  };
 }
 
 function createId(prefix) {
@@ -469,11 +678,16 @@ function render() {
 function renderSyncStatus() {
   if (!els.syncStatus) return;
   if (state.localApi.ready) {
-    els.syncStatus.textContent = "手机与后台同步中";
+    els.syncStatus.textContent = "本地服务同步中";
     els.syncStatus.className = "sync-status ok";
     return;
   }
-  els.syncStatus.textContent = "本机数据，后台可能看不到";
+  if (state.cloud.ready) {
+    els.syncStatus.textContent = "云端同步中";
+    els.syncStatus.className = "sync-status ok";
+    return;
+  }
+  els.syncStatus.textContent = "未连云端，请刷新";
   els.syncStatus.className = "sync-status warn";
 }
 
@@ -513,6 +727,46 @@ function renderFulfillmentFields() {
   if (!els.pickupDate.value) els.pickupDate.value = todayValue();
   if (!els.deliveryDate.value) els.deliveryDate.value = todayValue();
   if (fulfillmentType === "delivery") fillPreferredAddress();
+  renderCart();
+}
+
+function requestDeliveryLocation() {
+  const settings = state.settings.delivery;
+  if (!Number.isFinite(settings.storeLatitude) || !Number.isFinite(settings.storeLongitude)) {
+    els.deliveryLocationStatus.textContent = "门店尚未配置配送定位，请联系店员";
+    return Promise.resolve(false);
+  }
+  if (!navigator.geolocation) {
+    els.deliveryLocationStatus.textContent = "当前浏览器不支持定位，请使用微信打开";
+    return Promise.resolve(false);
+  }
+  els.deliveryLocationStatus.textContent = "正在获取定位…";
+  return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+      const distanceKm = calculateDistanceKm(settings.storeLatitude, settings.storeLongitude, latitude, longitude);
+      state.deliveryLocation = { latitude, longitude, distanceKm };
+      els.deliveryLocationStatus.textContent = distanceKm <= 3
+        ? `定位成功，距门店 ${distanceKm.toFixed(1)} 公里，可配送`
+        : `距门店 ${distanceKm.toFixed(1)} 公里，超出 3 公里配送范围`;
+      resolve(distanceKm <= 3);
+    },
+    () => {
+      state.deliveryLocation = null;
+      els.deliveryLocationStatus.textContent = "未获得定位，请允许定位后重试";
+      resolve(false);
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+  ));
+}
+
+function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+  const radians = (degrees) => degrees * Math.PI / 180;
+  const deltaLat = radians(lat2 - lat1);
+  const deltaLon = radians(lon2 - lon1);
+  const a = Math.sin(deltaLat / 2) ** 2
+    + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(deltaLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function getSavedAddresses() {
@@ -625,21 +879,30 @@ function buildFulfillmentLabel(order) {
 }
 
 function renderAuth() {
-  if (!state.customerProfile) {
-    els.authStatus.textContent = "未授权。本地测试请点击模拟授权；正式小程序中将通过微信授权识别。";
-    els.authorizeCustomer.classList.remove("hidden");
+  if (!state.customerProfile?.phoneVerified) {
+    els.authStatus.textContent = "首次点餐请验证称呼和手机号，后续扫码自动匹配会员余额和订单。";
+    if (state.customerProfile) {
+      els.bindName.value = state.customerProfile.name || "";
+      els.bindPhone.value = state.customerProfile.phone || "";
+    }
+    els.phoneBindForm.classList.remove("hidden");
+    els.changeCustomer.classList.add("hidden");
     return;
   }
-  els.authorizeCustomer.classList.add("hidden");
-  els.authStatus.textContent = `${state.customerProfile.name} · ${state.customerProfile.phone || "已授权微信身份"}`;
+  els.phoneBindForm.classList.add("hidden");
+  els.changeCustomer.classList.remove("hidden");
+  els.bindName.value = state.customerProfile.name || "";
+  els.bindPhone.value = state.customerProfile.phone || "";
+  els.bindCode.value = "";
+  els.authStatus.textContent = `${state.customerProfile.name} · ${state.customerProfile.phone || "已绑定身份"}`;
 }
 
 function renderMember() {
   const phone = normalizePhone(state.customerProfile?.phone);
   state.currentMember = phone ? state.members.find((member) => member.phone === phone) || null : null;
-  if (!phone) {
-    els.memberStatus.textContent = state.customerProfile ? "已识别微信身份，暂无手机号信息" : "授权后自动识别会员余额";
-    els.joinMember.classList.toggle("hidden", !phone);
+  if (!hasVerifiedCustomer()) {
+    els.memberStatus.textContent = "完成手机号验证后自动识别会员余额";
+    els.joinMember.classList.add("hidden");
     els.openRecharge.classList.add("hidden");
     return;
   }
@@ -656,8 +919,8 @@ function renderMember() {
 
 function renderWallet() {
   if (!els.walletStatus) return;
-  if (!state.customerProfile) {
-    els.walletStatus.textContent = "授权后查看";
+  if (!hasVerifiedCustomer()) {
+    els.walletStatus.textContent = "验证后查看";
     return;
   }
   const phone = normalizePhone(state.customerProfile.phone);
@@ -666,13 +929,13 @@ function renderWallet() {
 }
 
 async function joinMemberFromPage() {
-  if (!state.customerProfile) {
-    els.orderHint.textContent = "请先完成微信授权。";
+  if (!hasVerifiedCustomer()) {
+    els.orderHint.textContent = "请先完成手机号验证。";
     return;
   }
   const phone = normalizePhone(state.customerProfile.phone);
   if (!phone) {
-    els.orderHint.textContent = "当前授权没有手机号，无法创建会员档案。";
+    els.orderHint.textContent = "当前身份没有手机号，无法创建会员档案。";
     return;
   }
   const member = getOrCreateMember(state.customerProfile.name || "微信顾客", phone);
@@ -682,13 +945,13 @@ async function joinMemberFromPage() {
 }
 
 function openRechargeDialog() {
-  if (!state.customerProfile) {
-    els.orderHint.textContent = "请先完成微信授权。";
+  if (!hasVerifiedCustomer()) {
+    els.orderHint.textContent = "请先完成手机号验证。";
     return;
   }
   const phone = normalizePhone(state.customerProfile.phone);
   if (!phone) {
-    els.orderHint.textContent = "当前授权没有手机号，无法充值。";
+    els.orderHint.textContent = "当前身份没有手机号，无法充值。";
     return;
   }
   const member = getOrCreateMember(state.customerProfile.name || "微信顾客", phone);
@@ -739,7 +1002,15 @@ function renderCart() {
   const rows = getCartRows();
   const count = rows.reduce((sum, row) => sum + row.quantity, 0);
   els.cartCount.textContent = `${count} 件`;
-  els.cartTotal.textContent = money(cartTotal());
+  const goodsAmount = cartTotal();
+  const isDelivery = getCheckedValue("fulfillmentType") === "delivery";
+  const settings = state.settings.delivery;
+  const deliveryFee = isDelivery && goodsAmount < settings.freeThreshold ? settings.fee : 0;
+  els.cartTotal.textContent = money(goodsAmount + deliveryFee);
+  els.deliveryFeeSummary.classList.toggle("hidden", !isDelivery);
+  els.deliveryFeeSummary.textContent = !isDelivery ? "" : deliveryFee === 0
+    ? `${settings.testMode ? "【临时测试】" : ""}商品满 ¥${money(settings.freeThreshold)}，配送费已减免`
+    : `${settings.testMode ? "【临时测试】" : ""}配送费 ¥${money(deliveryFee)}；再点 ¥${money(Math.max(0, settings.freeThreshold - goodsAmount))} 可免配送费`;
 
   if (!rows.length) {
     els.cartPanel.classList.add("empty-cart");
@@ -810,7 +1081,19 @@ function nextCardNumber() {
   return card;
 }
 
-function createRecord(member, type, amount, note) {
+function getRechargeBonus(amount) {
+  const amountInCents = Math.round(Number(amount || 0) * 100);
+  const matched = [...(state.settings.bonusRules || [])]
+    .map((rule) => ({
+      minAmountInCents: Math.round(Number(rule.minAmount || 0) * 100),
+      bonusAmountInCents: Math.round(Number(rule.bonusAmount || 0) * 100),
+    }))
+    .filter((rule) => rule.minAmountInCents > 0 && amountInCents >= rule.minAmountInCents)
+    .sort((a, b) => b.minAmountInCents - a.minAmountInCents)[0];
+  return matched ? Number((matched.bonusAmountInCents / 100).toFixed(2)) : 0;
+}
+
+function createRecord(member, type, amount, note, bonusAmount = 0) {
   return {
     id: createId("record"),
     memberId: member.id,
@@ -818,7 +1101,7 @@ function createRecord(member, type, amount, note) {
     staffId: null,
     type,
     amount,
-    bonusAmount: 0,
+    bonusAmount,
     balanceAfter: member.balance,
     note,
     createdAt: new Date().toISOString(),
@@ -838,7 +1121,17 @@ function paymentMethodLabel(method) {
   }[method] || "在线支付";
 }
 
+function isMockPaymentMode() {
+  return window.AIWA_CLOUDBASE_CONFIG?.payments?.mode !== "live";
+}
+
 function paymentHint(method = els.paymentMethod.value) {
+  if (isMockPaymentMode() && method !== "member_balance") {
+    return {
+      wechat_pay: "内测模拟微信支付，确认后下单入账",
+      alipay_pay: "内测模拟支付宝跳转，确认后下单入账",
+    }[method] || "内测模拟支付，确认后下单入账";
+  }
   return {
     wechat_pay: "微信内完成付款后自动下单",
     alipay_pay: "将跳转支付宝 App 或外部浏览器完成付款",
@@ -851,10 +1144,11 @@ function renderPaymentHint() {
 }
 
 async function requestExternalLikePayment(paymentMethod, amount, orderNo, scene) {
+  const modeText = isMockPaymentMode() ? "内测模拟" : "本地测试";
   if (paymentMethod === "alipay_pay") {
     const payUrl = `alipay-mock.html?orderNo=${encodeURIComponent(orderNo)}&amount=${encodeURIComponent(amount.toFixed(2))}&scene=${encodeURIComponent(scene)}`;
     const payWindow = window.open(payUrl, "_blank");
-    const done = window.confirm("已打开支付宝支付页面。请在支付宝 App 或外部浏览器完成付款后，再点“确定”完成本地测试入账。");
+    const done = window.confirm(`已打开支付宝${modeText}页面。请确认付款流程完成后，再点“确定”完成入账。`);
     if (!done) return { ok: false, message: "支付宝支付未确认，未入账。" };
     return {
       ok: true,
@@ -869,7 +1163,7 @@ async function requestExternalLikePayment(paymentMethod, amount, orderNo, scene)
     };
   }
 
-  const done = window.confirm(`本地测试：请确认${paymentMethodLabel(paymentMethod)}已完成付款。`);
+  const done = window.confirm(`${modeText}：请确认${paymentMethodLabel(paymentMethod)}已完成付款。`);
   if (!done) return { ok: false, message: `${paymentMethodLabel(paymentMethod)}未确认，未入账。` };
   return {
     ok: true,
@@ -900,16 +1194,16 @@ async function requestPayment(paymentMethod, amount, orderNo, member) {
 }
 
 async function submitOrder() {
-  if (!state.customerProfile) {
-    els.orderHint.textContent = "请先完成微信授权。";
+  if (!hasVerifiedCustomer()) {
+    els.orderHint.textContent = "请先完成手机号验证。";
     return;
   }
   const name = state.customerProfile.name || "微信顾客";
   const phone = normalizePhone(state.customerProfile.phone);
   const rows = getCartRows();
-  const total = cartTotal();
+  const goodsAmount = cartTotal();
   if (!phone) {
-    els.orderHint.textContent = "当前授权没有手机号。正式小程序需完成手机号授权后再下单。";
+    els.orderHint.textContent = "当前身份没有手机号，请重新绑定手机号后再下单。";
     return;
   }
   if (!rows.length) {
@@ -921,6 +1215,23 @@ async function submitOrder() {
     els.orderHint.textContent = fulfillment.message;
     return;
   }
+  if (fulfillment.fulfillmentType === "delivery") {
+    if (!state.deliveryLocation) {
+      const located = await requestDeliveryLocation();
+      if (!located) {
+        els.orderHint.textContent = "配送下单需要定位授权，且当前位置须在门店 3 公里内。";
+        return;
+      }
+    }
+    if (state.deliveryLocation.distanceKm > 3) {
+      els.orderHint.textContent = `当前位置距门店 ${state.deliveryLocation.distanceKm.toFixed(1)} 公里，超出 3 公里配送范围。`;
+      return;
+    }
+  }
+  const deliveryFee = fulfillment.fulfillmentType === "delivery" && goodsAmount < state.settings.delivery.freeThreshold
+    ? state.settings.delivery.fee
+    : 0;
+  const total = Number((goodsAmount + deliveryFee).toFixed(2));
   if (
     fulfillment.fulfillmentType === "delivery" &&
     !window.confirm(`请确认配送地址：\n${fulfillment.deliveryAddress}\n\n送达时间：${[fulfillment.deliveryDate, fulfillment.deliveryTime].filter(Boolean).join(" ") || "尽快送达"}`)
@@ -963,6 +1274,9 @@ async function submitOrder() {
       refundAmount: 0,
       itemStatus: "normal",
     })),
+    goodsAmount,
+    deliveryFee,
+    deliveryFeeWaived: fulfillment.fulfillmentType === "delivery" && deliveryFee === 0,
     totalAmount: total,
     paidAmount: payment.paidAmount,
     refundAmount: 0,
@@ -980,6 +1294,9 @@ async function submitOrder() {
     deliveryAddress: fulfillment.deliveryAddress,
     deliveryDate: fulfillment.deliveryDate,
     deliveryTime: fulfillment.deliveryTime,
+    deliveryLatitude: fulfillment.fulfillmentType === "delivery" ? state.deliveryLocation?.latitude ?? null : null,
+    deliveryLongitude: fulfillment.fulfillmentType === "delivery" ? state.deliveryLocation?.longitude ?? null : null,
+    deliveryDistanceKm: fulfillment.fulfillmentType === "delivery" && state.deliveryLocation ? Number(state.deliveryLocation.distanceKm.toFixed(2)) : null,
     fulfillmentLabel: fulfillment.fulfillmentLabel,
     note: [customerNote, payment.paymentNote].filter(Boolean).join("；"),
     createdAt: new Date().toISOString(),
@@ -999,8 +1316,8 @@ async function submitOrder() {
 
 async function submitRecharge(event) {
   event.preventDefault();
-  if (!state.customerProfile) {
-    els.orderHint.textContent = "请先完成微信授权。";
+  if (!hasVerifiedCustomer()) {
+    els.orderHint.textContent = "请先完成手机号验证。";
     return;
   }
   const name = state.customerProfile.name || "微信顾客";
@@ -1018,21 +1335,30 @@ async function submitRecharge(event) {
     els.rechargeHint.textContent = payment.message || "充值支付未完成，余额未增加。";
     return;
   }
-  member.balance += amount;
-  state.records.push(createRecord(member, "recharge", amount, `消费者端充值 · ${paymentMethodLabel(paymentMethod)} · ${payment.paymentTradeNo}`));
+  const bonusAmount = getRechargeBonus(amount);
+  member.balance = Number((member.balance + amount + bonusAmount).toFixed(2));
+  state.records.push(createRecord(
+    member,
+    "recharge",
+    amount,
+    `消费者端充值 · ${paymentMethodLabel(paymentMethod)} · ${payment.paymentTradeNo}${bonusAmount > 0 ? ` · 赠送 ${money(bonusAmount)}` : ""}`,
+    bonusAmount
+  ));
   els.rechargeAmount.value = "";
   await saveAll();
   render();
   renderWallet();
   els.rechargeDialog.close();
-  els.orderHint.textContent = `充值已记录，当前余额 ${money(member.balance)}。`;
+  els.orderHint.textContent = bonusAmount > 0
+    ? `充值成功，赠送 ${money(bonusAmount)}，当前余额 ${money(member.balance)}。`
+    : `充值已记录，当前余额 ${money(member.balance)}。`;
 }
 
 function renderHistory() {
   renderWallet();
-  if (!state.customerProfile) {
+  if (!hasVerifiedCustomer()) {
     els.historyList.className = "history-list empty";
-    els.historyList.textContent = "请先完成微信授权后查看订单";
+    els.historyList.textContent = "请先完成手机号验证后查看订单";
     return;
   }
   const phone = normalizePhone(state.customerProfile.phone);
@@ -1064,6 +1390,7 @@ function statusLabel(status) {
     pending: "待接单",
     making: "制作中",
     ready: "待取餐",
+    delivering: "配送中",
     completed: "已完成",
     cancelled: "已取消",
     refunded: "已退款",
@@ -1080,8 +1407,14 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-els.authorizeCustomer.addEventListener("click", authorizeCustomer);
+els.phoneBindForm.addEventListener("submit", bindCustomerPhone);
+els.sendBindCode.addEventListener("click", sendCustomerBindCode);
+els.changeCustomer.addEventListener("click", changeCustomerPhone);
 els.fulfillmentTypes.forEach((input) => input.addEventListener("change", renderFulfillmentFields));
+els.fulfillmentTypes.forEach((input) => input.addEventListener("change", () => {
+  if (input.checked && input.value === "delivery") requestDeliveryLocation();
+}));
+els.requestDeliveryLocation.addEventListener("click", requestDeliveryLocation);
 els.pickupModes.forEach((input) => input.addEventListener("change", renderFulfillmentFields));
 els.savedAddressSelect.addEventListener("change", selectSavedAddress);
 els.joinMember.addEventListener("click", joinMemberFromPage);
