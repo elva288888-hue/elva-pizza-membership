@@ -1,0 +1,16 @@
+{
+  "envId": "elva-pizza-prod-d3f8fae10cb05aca",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "membershipApi",
+      "timeout": 10,
+      "runtime": "Nodejs16.13"
+    },
+    {
+      "name": "partnerPay",
+      "timeout": 10,
+      "runtime": "Nodejs16.13"
+    }
+  ]
+}

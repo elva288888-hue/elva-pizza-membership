@@ -154,6 +154,30 @@ test("joining a member requires a WeChat phone authorization code", async () => 
   assert.equal(cloudCalls.length, 0);
 });
 
+test("home allows browsing before the user chooses to join as a member", () => {
+  const { page } = loadOrderPage();
+  assert.equal(page.data.authRequired, false);
+
+  page.openMemberJoin();
+  assert.equal(page.data.authRequired, true);
+
+  page.closeMemberJoin();
+  assert.equal(page.data.authRequired, false);
+});
+
+test("checkout asks for phone verification only after the user chooses to submit", async () => {
+  const { page, toasts, cloudCalls } = loadOrderPage();
+  page.data.cartRows = [{ product: { id: "p1" }, quantity: 1 }];
+  page.data.fulfillmentType = "pickup";
+  page.data.pickupMode = "now";
+
+  await page.submitOrder();
+
+  assert.equal(page.data.authRequired, true);
+  assert.equal(toasts.at(-1).title, "结算前请先验证手机号");
+  assert.equal(cloudCalls.length, 0);
+});
+
 test("joining a member requires a nickname before phone authorization", async () => {
   const { page, toasts, cloudCalls } = loadOrderPage();
   await page.joinMember({ detail: { code: "valid-phone-code" } });

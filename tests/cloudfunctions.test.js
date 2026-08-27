@@ -525,6 +525,22 @@ test("mini-program catalog returns oversized images through cloud-storage URLs",
   assert.match(result.products[0].imageFileId, /^cloud:\/\//);
 });
 
+test("mini-program restores a previously linked member from the current WeChat openid", async () => {
+  const seed = baseSeed();
+  seed.members[0].openid = "openid-linked-member";
+  const { main } = loadMembershipApi(seed, "openid-linked-member");
+
+  const result = await main({
+    action: "getMiniProgramData",
+    payload: { storeId: "store_aiwa_pizza_main" },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.member.id, seed.members[0].id);
+  assert.equal(result.customer.phone, seed.members[0].phone);
+  assert.equal(result.customer.name, seed.members[0].name);
+});
+
 test("single-store migration backs up and unifies products, members, and orders", async () => {
   const seed = baseSeed();
   seed.stores.push({

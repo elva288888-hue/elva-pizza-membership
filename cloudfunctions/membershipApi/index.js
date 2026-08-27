@@ -251,7 +251,9 @@ async function getMiniProgramData(payload = {}) {
     getDoc(COLLECTIONS.stores, storeId),
     getProductsByStore(storeId),
     getCategoriesByStore(storeId),
-    phone ? findMemberByPhone(phone, storeId) : Promise.resolve(null),
+    phone
+      ? findMemberByPhone(phone, storeId)
+      : (openid ? findMemberByOpenid(openid, storeId) : Promise.resolve(null)),
     getDeliverySettings(),
   ]);
   const products = await resolveProductImageUrls(rawProducts);
@@ -259,7 +261,8 @@ async function getMiniProgramData(payload = {}) {
   return ok({
     customer: {
       openid,
-      phone,
+      phone: member?.phone || phone,
+      name: member?.name || "",
     },
     store,
     products,
@@ -1287,6 +1290,23 @@ async function findMemberByPhone(phone, storeId = DEFAULT_STORE_ID) {
   const anyStoreResult = await db
     .collection(COLLECTIONS.members)
     .where({ phone })
+    .limit(1)
+    .get();
+  return anyStoreResult.data?.[0] ? removeCloudId(anyStoreResult.data[0]) : null;
+}
+
+async function findMemberByOpenid(openid, storeId = DEFAULT_STORE_ID) {
+  if (!openid) return null;
+  const storeResult = await db
+    .collection(COLLECTIONS.members)
+    .where({ openid, storeId })
+    .limit(1)
+    .get();
+  if (storeResult.data?.[0]) return removeCloudId(storeResult.data[0]);
+
+  const anyStoreResult = await db
+    .collection(COLLECTIONS.members)
+    .where({ openid })
     .limit(1)
     .get();
   return anyStoreResult.data?.[0] ? removeCloudId(anyStoreResult.data[0]) : null;

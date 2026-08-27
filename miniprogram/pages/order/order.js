@@ -15,7 +15,7 @@ Page({
     customer: null,
     memberNameInput: "",
     needsMemberName: true,
-    authRequired: true,
+    authRequired: false,
     authSubmitting: false,
     currentMember: null,
     memberText: "授权后可加入会员并使用余额支付",
@@ -308,9 +308,23 @@ Page({
 
   noop() {},
 
+  openMemberJoin() {
+    const savedName = String(this.data.memberNameInput || wx.getStorageSync?.("aiwa_member_name") || "").trim();
+    this.setData({
+      authRequired: true,
+      memberNameInput: savedName,
+      needsMemberName: !savedName,
+      cartExpanded: false
+    });
+  },
+
+  closeMemberJoin() {
+    if (!this.data.authSubmitting) this.setData({ authRequired: false });
+  },
+
   openRecharge() {
     if (!this.data.currentMember) {
-      wx.showToast({ title: "请先加入会员", icon: "none" });
+      this.openMemberJoin();
       return;
     }
     this.setData({ rechargeOpen: true, cartExpanded: false });
@@ -495,6 +509,12 @@ Page({
         wx.showToast({ title: "超出 3 公里配送范围", icon: "none" });
         return;
       }
+    }
+
+    if (!this.data.currentMember || !this.data.customer?.phone) {
+      this.openMemberJoin();
+      wx.showToast({ title: "结算前请先验证手机号", icon: "none" });
+      return;
     }
 
     if (this.data.paymentMethod === "wechat_pay") {

@@ -14,6 +14,7 @@
 }
 
 .auth-card {
+  position: relative;
   width: 100%;
   padding: 52rpx 40rpx 38rpx;
   border-radius: 28rpx;
@@ -23,10 +24,25 @@
   box-shadow: 0 28rpx 80rpx rgba(8, 35, 27, 0.24);
 }
 
+.auth-close {
+  position: absolute;
+  top: 14rpx;
+  right: 18rpx;
+  width: 64rpx;
+  min-width: 64rpx;
+  height: 64rpx;
+  padding: 0;
+  color: #63716b;
+  background: transparent;
+  font-size: 42rpx;
+  line-height: 60rpx;
+}
+.auth-close::after, .auth-cancel::after { border: 0; }
 .auth-logo { width: 128rpx; height: 128rpx; border-radius: 24rpx; }
 .auth-title { display: block; margin-top: 24rpx; color: #1f2b27; font-size: 38rpx; font-weight: 800; }
 .auth-copy { display: block; margin: 18rpx 0 30rpx; color: #63716b; font-size: 26rpx; line-height: 1.6; }
 .auth-card .auth-button { color: #fff; background: #0f8a6b; }
+.auth-card .auth-cancel { margin-top: 14rpx; color: #51605a; background: transparent; font-size: 26rpx; }
 .auth-note { display: block; margin-top: 18rpx; color: #89938f; font-size: 22rpx; }
 
 .delivery-scope-notice {
