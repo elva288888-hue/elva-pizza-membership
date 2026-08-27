@@ -53,6 +53,8 @@ function loadOrderPage() {
     String,
     Set,
     Promise,
+    setTimeout,
+    clearTimeout,
   });
 
   const page = {
@@ -261,4 +263,15 @@ test("successful orders show a persistent confirmation with order number", () =>
   assert.match(page.data.orderSuccessMessage, /配送/);
   page.closeOrderSuccess();
   assert.equal(page.data.orderSuccessOpen, false);
+});
+
+test("phone authorization has an explicit timeout and visible failure dialog", () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, "../miniprogram/pages/order/order.js"),
+    "utf8"
+  );
+  assert.match(source, /withTimeout\(wx\.cloud\.callFunction/);
+  assert.match(source, /8000, "手机号授权响应超时/);
+  assert.match(source, /title: "手机号授权未完成"/);
+  assert.ok(source.indexOf("wx.hideLoading();") < source.indexOf('wx.showModal({\n        title: "手机号授权未完成"'));
 });

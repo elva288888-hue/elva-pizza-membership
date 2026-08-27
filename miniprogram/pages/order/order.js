@@ -423,7 +423,7 @@ Page({
     this.setData({ authSubmitting: true });
     wx.showLoading({ title: "正在登录" });
     try {
-      const result = await wx.cloud.callFunction({
+      const result = await withTimeout(wx.cloud.callFunction({
         name: app.globalData.membershipFunction,
         data: {
           action: "joinMiniProgramMember",
@@ -433,21 +433,27 @@ Page({
             name
           }
         }
-      });
+      }), 8000, "手机号授权响应超时，请检查网络后重新授权");
       if (!result.result?.ok) throw new Error(result.result?.message || "加入会员失败");
       const customer = { ...this.data.customer, ...(result.result.customer || {}), name: result.result.member?.name || name };
       wx.setStorageSync?.("aiwa_member_name", customer.name);
       app.globalData.customer = customer;
       this.setData({ customer, currentMember: result.result.member || null, authRequired: false });
       this.refreshDerived();
-      wx.showToast({ title: "登录成功", icon: "success" });
-      await this.loadStoreData({ silent: true });
-    } catch (error) {
-      console.error(error);
-      wx.showToast({ title: error.message || "加入会员失败", icon: "none" });
-    } finally {
       wx.hideLoading();
       this.setData({ authSubmitting: false });
+      wx.showToast({ title: "登录成功", icon: "success" });
+      this.loadStoreData({ silent: true }).catch((error) => console.error("刷新会员数据失败", error));
+    } catch (error) {
+      console.error(error);
+      wx.hideLoading();
+      this.setData({ authSubmitting: false });
+      wx.showModal({
+        title: "手机号授权未完成",
+        content: error.message || "请检查网络后重新点击手机号授权登录。",
+        confirmText: "我知道了",
+        showCancel: false
+      });
     }
   },
 
@@ -731,6 +737,13 @@ function yuanToFen(value) {
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function withTimeout(promise, milliseconds, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds))
+  ]);
 }
 
 function buildPaymentDescription(order) {
