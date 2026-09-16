@@ -12,17 +12,29 @@
     </view>
   </view>
   <view class="shop-card">
-    <image class="logo" src="/assets/aiwa-pizza-logo.jpg" mode="aspectFill"></image>
-    <view class="shop-copy">
-      <text class="title">爱娃披萨店</text>
-      <text class="subtitle">自助点餐 · 自取或配送</text>
+    <view class="shop-main">
+      <image class="logo" src="/assets/aiwa-pizza-logo.jpg" mode="aspectFill"></image>
+      <view class="shop-copy">
+        <text class="title">爱娃披萨店</text>
+        <text class="subtitle">自助点餐 · 自取或配送</text>
+      </view>
+      <button class="orders-button" size="mini" bindtap="goOrders">我的订单</button>
     </view>
-    <button class="orders-button" size="mini" bindtap="goOrders">我的订单</button>
+    <view class="service-contact" role="button" tabindex="0" bindtap="callCustomerService" aria-label="拨打客服电话 13230807901">
+      <view class="service-phone">
+        <text class="service-label">客服</text>
+        <text>{{customerService.displayPhone}}</text>
+      </view>
+      <view class="service-meta">
+        <text>周一至周日 8:00–20:00</text>
+        <text class="service-call-action">拨打 ›</text>
+      </view>
+    </view>
   </view>
 
   <view class="panel">
     <view class="panel-head">
-      <view>
+      <view class="member-copy">
         <text class="panel-title">会员中心</text>
         <text class="panel-subtitle">{{memberText}}</text>
       </view>

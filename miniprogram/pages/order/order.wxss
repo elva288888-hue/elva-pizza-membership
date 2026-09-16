@@ -90,10 +90,15 @@
 }
 
 .shop-card {
+  display: grid;
+  gap: 14rpx;
+  padding: 20rpx;
+}
+
+.shop-main {
   display: flex;
   align-items: center;
   gap: 18rpx;
-  padding: 20rpx;
 }
 
 .logo {
@@ -106,6 +111,54 @@
   flex: 1;
   display: grid;
   gap: 6rpx;
+  min-width: 0;
+}
+
+.service-contact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
+  width: 100%;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 12rpx 0 0;
+  border-top: 1rpx solid #e2e9e5;
+  box-sizing: border-box;
+  color: #1f2b27;
+  font-size: 24rpx;
+  line-height: 1.25;
+}
+
+.service-phone,
+.service-meta {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.service-phone {
+  gap: 10rpx;
+  color: #08775d;
+  font-size: 27rpx;
+  font-weight: 800;
+}
+
+.service-label {
+  color: #52615b;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
+.service-meta {
+  gap: 12rpx;
+  color: #63716b;
+  font-size: 21rpx;
+}
+
+.service-call-action {
+  color: #08775d;
+  font-weight: 800;
 }
 
 .title,
@@ -297,6 +350,25 @@
   align-items: center;
   justify-content: space-between;
   gap: 18rpx;
+}
+
+.member-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-head .recharge-entry {
+  flex: 0 0 116rpx;
+  width: 116rpx;
+  min-width: 116rpx;
+  height: 64rpx;
+  min-height: 64rpx;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-size: 25rpx;
+  line-height: 62rpx;
+  white-space: nowrap;
 }
 
 .segmented,

@@ -49,7 +49,11 @@ Page({
     rechargeSubmitting: false,
     orderSuccessOpen: false,
     orderSuccessNo: "",
-    orderSuccessMessage: ""
+    orderSuccessMessage: "",
+    customerService: {
+      phone: "13230807901",
+      displayPhone: "132 3080 7901"
+    }
   },
 
   hasLoaded: false,
@@ -67,6 +71,16 @@ Page({
   async onPullDownRefresh() {
     await this.loadStoreData({ silent: true });
     wx.stopPullDownRefresh();
+  },
+
+  callCustomerService() {
+    wx.makePhoneCall({
+      phoneNumber: this.data.customerService.phone,
+      fail: (error) => {
+        const cancelled = String(error?.errMsg || "").includes("cancel");
+        if (!cancelled) wx.showToast({ title: "拨号未完成，请稍后重试", icon: "none" });
+      }
+    });
   },
 
   async authorizeCustomer() {

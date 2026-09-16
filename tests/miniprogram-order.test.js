@@ -8,6 +8,7 @@ function loadOrderPage() {
   let pageDefinition;
   const toasts = [];
   const cloudCalls = [];
+  const phoneCalls = [];
   const app = {
     globalData: {
       storeId: "store_aiwa_pizza_main",
@@ -25,6 +26,7 @@ function loadOrderPage() {
     stopPullDownRefresh() {},
     navigateTo() {},
     showModal() {},
+    makePhoneCall: (value) => phoneCalls.push(value),
     requestPayment: async () => {},
     getLocation: async () => ({ latitude: 31.2304, longitude: 121.4737 }),
     cloud: {
@@ -64,12 +66,19 @@ function loadOrderPage() {
       Object.assign(this.data, patch);
     },
   };
-  return { page, app, wx, toasts, cloudCalls };
+  return { page, app, wx, toasts, cloudCalls, phoneCalls };
 }
 
 function event(dataset = {}, detail = {}) {
   return { currentTarget: { dataset }, detail };
 }
+
+test("customer service entry dials the configured phone number", () => {
+  const { page, phoneCalls } = loadOrderPage();
+  page.callCustomerService();
+  assert.equal(phoneCalls.length, 1);
+  assert.equal(phoneCalls[0].phoneNumber, "13230807901");
+});
 
 test("cart totals and count stay consistent when quantities change", () => {
   const { page } = loadOrderPage();
