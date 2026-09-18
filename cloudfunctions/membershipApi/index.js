@@ -18,6 +18,7 @@ const COLLECTIONS = {
   deliverySettings: "delivery_settings",
   loginCodes: "login_codes",
   adminSessions: "admin_sessions",
+  customerProfiles: "customer_profiles",
   migrationBackups: "migration_backups",
   migrations: "schema_migrations",
 };
@@ -37,7 +38,11 @@ exports.main = async (event = {}) => {
     if (action === "verifyLoginCode") return await verifyLoginCode(payload.phone, payload.code);
     if (action === "sendCustomerBindCode") return await sendCustomerBindCode(payload.phone);
     if (action === "verifyCustomerBindCode") return await verifyCustomerBindCode(payload.phone, payload.code);
-    if (action === "joinMiniProgramMember") return await joinMiniProgramMember(payload);
+    if (action === "authorizeMiniProgramPhone") return await authorizeMiniProgramPhone(payload);
+    if (action === "createMiniProgramMember") return await createMiniProgramMember(payload);
+    if (action === "joinMiniProgramMember") {
+      return fail("会员注册流程已更新，请先授权手机号，再从会员充值入口加入会员。");
+    }
     if (action === "getMiniProgramData") return await getMiniProgramData(payload);
     if (action === "getMiniProgramOrders") return await getMiniProgramOrders(payload);
     if (action === "createMiniProgramPendingOrder") return await createMiniProgramPendingOrder(payload);
@@ -246,7 +251,8 @@ async function getMiniProgramData(payload = {}) {
   }
   const storeId = await resolveStoreId(payload.storeId);
   const openid = getOpenid(payload);
-  const phone = normalizePhone(payload.phone);
+  const profile = openid ? await getCustomerProfile(openid) : null;
+  const phone = normalizePhone(profile?.phone || payload.phone);
   const [store, rawProducts, categories, member, deliverySettings] = await Promise.all([
     getDoc(COLLECTIONS.stores, storeId),
     getProductsByStore(storeId),
@@ -262,7 +268,8 @@ async function getMiniProgramData(payload = {}) {
     customer: {
       openid,
       phone: member?.phone || phone,
-      name: member?.name || "",
+      name: member?.name || profile?.name || "",
+      phoneAuthorized: Boolean(member?.phone || phone),
     },
     store,
     products,
@@ -354,6 +361,66 @@ async function joinMiniProgramMember(payload = {}) {
   });
 
   return ok({ customer: { openid, phone, name: member.name }, member });
+}
+
+async function authorizeMiniProgramPhone(payload = {}) {
+  const phoneCode = String(payload.phoneCode || "").trim();
+  if (!phoneCode) return fail("未取得手机号授权，请重新授权。");
+  const openid = getOpenid(payload);
+  if (!openid) return fail("未取得微信身份，请重新进入小程序。");
+
+  let phoneResult;
+  try {
+    phoneResult = await cloud.openapi.phonenumber.getPhoneNumber({ code: phoneCode });
+  } catch (error) {
+    console.error("[get phone number failed]", error);
+    return fail("手机号授权失败，请重新授权。");
+  }
+  const phoneInfo = phoneResult?.phoneInfo || phoneResult?.result?.phoneInfo || {};
+  const phone = normalizePhone(phoneInfo.purePhoneNumber || phoneInfo.phoneNumber);
+  if (!/^1\d{10}$/.test(phone)) return fail("未能取得有效手机号，请重新授权。");
+
+  const storeId = await resolveStoreId(payload.storeId);
+  const profile = {
+    id: customerProfileId(openid),
+    openid,
+    phone,
+    storeId,
+    phoneAuthorizedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await upsert(COLLECTIONS.customerProfiles, profile.id, profile);
+  const member = await findMemberByPhone(phone, storeId);
+  if (member && member.openid !== openid) {
+    await upsert(COLLECTIONS.members, member.id, { ...member, openid, updatedAt: new Date().toISOString() });
+  }
+  return ok({
+    customer: { openid, phone, phoneAuthorized: true },
+    member: member ? { ...member, openid } : null,
+  });
+}
+
+async function createMiniProgramMember(payload = {}) {
+  const openid = getOpenid(payload);
+  const profile = openid ? await getCustomerProfile(openid) : null;
+  if (!profile?.phone) return fail("请先完成手机号授权。");
+  const name = String(payload.name || "").trim();
+  if (!name || name === "微信顾客") return fail("请先填写会员昵称。");
+  const storeId = await resolveStoreId(profile.storeId || payload.storeId);
+  // Enforce the one-phone-one-member invariant before the explicit enrollment
+  // write, including historical duplicates created by older versions.
+  await repairDuplicateMembers();
+  const member = await getOrCreateCloudMember({ storeId, name, phone: profile.phone, openid });
+  await upsert(COLLECTIONS.customerProfiles, profile.id, {
+    ...profile,
+    name: member.name,
+    memberId: member.id,
+    updatedAt: new Date().toISOString(),
+  });
+  return ok({
+    customer: { openid, phone: profile.phone, name: member.name, phoneAuthorized: true },
+    member,
+  });
 }
 
 async function confirmPaidMiniProgramRecharge(payload = {}) {
@@ -587,15 +654,9 @@ async function buildMiniProgramOrderDraft(payload = {}, payment = {}) {
   const fulfillment = buildFulfillmentInfo(payload, deliverySettings);
   if (!fulfillment.ok) return fulfillment;
 
-  let member = null;
-  if (phone) {
-    member = await getOrCreateCloudMember({
-      storeId,
-      name,
-      phone,
-      openid,
-    });
-  }
+  // A normal order must not enroll the customer as a member. Membership is
+  // created only from the explicit recharge/member action.
+  const member = phone ? await findMemberByPhone(phone, storeId) : null;
 
   const goodsAmount = Number(items.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2));
   const deliveryFee = fulfillment.fulfillmentType === "delivery" && goodsAmount < deliverySettings.freeThreshold
@@ -1293,6 +1354,15 @@ async function findMemberByPhone(phone, storeId = DEFAULT_STORE_ID) {
     .limit(1)
     .get();
   return anyStoreResult.data?.[0] ? removeCloudId(anyStoreResult.data[0]) : null;
+}
+
+function customerProfileId(openid) {
+  return `customer_${crypto.createHash("sha256").update(String(openid)).digest("hex").slice(0, 32)}`;
+}
+
+async function getCustomerProfile(openid) {
+  if (!openid) return null;
+  return getDoc(COLLECTIONS.customerProfiles, customerProfileId(openid));
 }
 
 async function findMemberByOpenid(openid, storeId = DEFAULT_STORE_ID) {

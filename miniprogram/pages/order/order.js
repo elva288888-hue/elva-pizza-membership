@@ -15,6 +15,7 @@ Page({
     customer: null,
     memberNameInput: "",
     needsMemberName: true,
+    authMode: "phone",
     authRequired: false,
     authSubmitting: false,
     currentMember: null,
@@ -61,6 +62,9 @@ Page({
   async onLoad() {
     await this.authorizeCustomer();
     await this.loadStoreData();
+    if (!this.data.customer?.phone) {
+      this.setData({ authRequired: true, authMode: "phone" });
+    }
     this.hasLoaded = true;
   },
 
@@ -187,7 +191,7 @@ Page({
       currentMember,
       memberText: currentMember
         ? `${currentMember.name || "会员"} · 会员号 ${currentMember.card || ""} · 余额 ¥${money(currentMember.balance)}`
-        : "未加入会员，付款或充值后可自动建档"
+        : "已验证手机号 · 充值后加入会员"
     });
   },
 
@@ -326,6 +330,7 @@ Page({
     const savedName = String(this.data.memberNameInput || wx.getStorageSync?.("aiwa_member_name") || "").trim();
     this.setData({
       authRequired: true,
+      authMode: "member",
       memberNameInput: savedName,
       needsMemberName: !savedName,
       cartExpanded: false
@@ -333,10 +338,14 @@ Page({
   },
 
   closeMemberJoin() {
-    if (!this.data.authSubmitting) this.setData({ authRequired: false });
+    if (!this.data.authSubmitting && this.data.authMode !== "phone") this.setData({ authRequired: false });
   },
 
   openRecharge() {
+    if (!this.data.customer?.phone) {
+      this.setData({ authRequired: true, authMode: "phone" });
+      return;
+    }
     if (!this.data.currentMember) {
       this.openMemberJoin();
       return;
@@ -422,15 +431,51 @@ Page({
     }
   },
 
-  async joinMember(event) {
+  async authorizePhone(event) {
+    const phoneCode = event.detail?.code;
+    if (!phoneCode) {
+      wx.showToast({ title: "需要授权手机号后才能使用小程序", icon: "none" });
+      return;
+    }
+    this.setData({ authSubmitting: true });
+    wx.showLoading({ title: "正在验证" });
+    try {
+      const result = await withTimeout(wx.cloud.callFunction({
+        name: app.globalData.membershipFunction,
+        data: {
+          action: "authorizeMiniProgramPhone",
+          payload: { phoneCode, storeId: app.globalData.storeId }
+        }
+      }), 8000, "手机号授权响应超时，请检查网络后重试");
+      if (!result.result?.ok) throw new Error(result.result?.message || "手机号授权失败");
+      const customer = { ...this.data.customer, ...(result.result.customer || {}) };
+      app.globalData.customer = customer;
+      this.setData({
+        customer,
+        currentMember: result.result.member || null,
+        authRequired: false,
+        authSubmitting: false
+      });
+      this.refreshDerived();
+      wx.showToast({ title: "手机号验证成功", icon: "success" });
+    } catch (error) {
+      console.error(error);
+      this.setData({ authSubmitting: false });
+      wx.showModal({ title: "手机号授权未完成", content: error.message || "请重新授权。", showCancel: false });
+    } finally {
+      wx.hideLoading();
+    }
+  },
+
+  async joinMember() {
     const name = this.data.memberNameInput.trim();
     if (!name) {
       wx.showToast({ title: "请先填写会员昵称", icon: "none" });
       return;
     }
-    const phoneCode = event.detail?.code;
-    if (!phoneCode) {
-      wx.showToast({ title: "需要授权手机号才能加入会员", icon: "none" });
+    if (!this.data.customer?.phone) {
+      this.setData({ authMode: "phone" });
+      wx.showToast({ title: "请先授权手机号", icon: "none" });
       return;
     }
 
@@ -440,9 +485,8 @@ Page({
       const result = await withTimeout(wx.cloud.callFunction({
         name: app.globalData.membershipFunction,
         data: {
-          action: "joinMiniProgramMember",
+          action: "createMiniProgramMember",
           payload: {
-            phoneCode,
             storeId: app.globalData.storeId,
             name
           }
@@ -456,7 +500,8 @@ Page({
       this.refreshDerived();
       wx.hideLoading();
       this.setData({ authSubmitting: false });
-      wx.showToast({ title: "登录成功", icon: "success" });
+      wx.showToast({ title: "已加入会员", icon: "success" });
+      this.openRecharge();
       this.loadStoreData({ silent: true }).catch((error) => console.error("刷新会员数据失败", error));
     } catch (error) {
       console.error(error);
@@ -531,8 +576,8 @@ Page({
       }
     }
 
-    if (!this.data.currentMember || !this.data.customer?.phone) {
-      this.openMemberJoin();
+    if (!this.data.customer?.phone) {
+      this.setData({ authRequired: true, authMode: "phone" });
       wx.showToast({ title: "结算前请先验证手机号", icon: "none" });
       return;
     }
@@ -546,6 +591,11 @@ Page({
   },
 
   async payWithMemberBalance() {
+    if (!this.data.currentMember) {
+      this.openRecharge();
+      wx.showToast({ title: "请先充值加入会员", icon: "none" });
+      return;
+    }
     wx.showLoading({ title: "提交订单" });
     try {
       const result = await wx.cloud.callFunction({

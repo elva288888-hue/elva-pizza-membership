@@ -1,50 +1,4 @@
 (() => {
-  var __create = Object.create;
-  var __defProp = Object.defineProperty;
-  var __defProps = Object.defineProperties;
-  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
-  var __getOwnPropNames = Object.getOwnPropertyNames;
-  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
-  var __getProtoOf = Object.getPrototypeOf;
-  var __hasOwnProp = Object.prototype.hasOwnProperty;
-  var __propIsEnum = Object.prototype.propertyIsEnumerable;
-  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-  var __spreadValues = (a, b) => {
-    for (var prop in b || (b = {}))
-      if (__hasOwnProp.call(b, prop))
-        __defNormalProp(a, prop, b[prop]);
-    if (__getOwnPropSymbols)
-      for (var prop of __getOwnPropSymbols(b)) {
-        if (__propIsEnum.call(b, prop))
-          __defNormalProp(a, prop, b[prop]);
-      }
-    return a;
-  };
-  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
-  var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-    get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-  }) : x)(function(x) {
-    if (typeof require !== "undefined") return require.apply(this, arguments);
-    throw Error('Dynamic require of "' + x + '" is not supported');
-  });
-  var __copyProps = (to, from, except, desc) => {
-    if (from && typeof from === "object" || typeof from === "function") {
-      for (let key of __getOwnPropNames(from))
-        if (!__hasOwnProp.call(to, key) && key !== except)
-          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-    }
-    return to;
-  };
-  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-    // If the importer is in node compatibility mode or this is not an ESM
-    // file that has been converted to a CommonJS file using a Babel-
-    // compatible transform (i.e. "__esModule" has not been set), then set
-    // "default" to the CommonJS "module.exports" for node compatibility.
-    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-    mod
-  ));
-
   // app.js
   var STORAGE_KEY = "aiwa_drink_membership_v1";
   var ORDER_SOUND_STORAGE_KEY = "aiwa_order_sound_enabled_v1";
@@ -68,6 +22,8 @@
   var lastPendingReminderAt = 0;
   var titleFlashTimer = null;
   var titleFlashStep = 0;
+  var lastSuccessfulSyncAt = null;
+  var syncFailureCount = 0;
   var orderSoundEnabled = localStorage.getItem(ORDER_SOUND_STORAGE_KEY) !== "false";
   var state = {
     localApi: {
@@ -131,7 +87,6 @@
     return result;
   }
   async function initCloudBase() {
-    var _a, _b;
     if (cloudConfig.localApi) {
       state.cloud.message = "\u672C\u5730\u5171\u4EAB\u6D4B\u8BD5\u6A21\u5F0F";
       return;
@@ -150,55 +105,55 @@
       state.cloud.app = window.cloudbase.init({ env: cloudConfig.envId });
       state.cloud.auth = state.cloud.app.auth();
       state.cloud.db = state.cloud.app.database();
-      if ((_a = state.cloud.auth) == null ? void 0 : _a.signInAnonymously) {
+      if (state.cloud.auth?.signInAnonymously) {
         let loginResult = await state.cloud.auth.signInAnonymously();
-        if (loginResult == null ? void 0 : loginResult.error) {
+        if (loginResult?.error) {
           await state.cloud.auth.signOut().catch(() => {
           });
           loginResult = await state.cloud.auth.signInAnonymously();
         }
-        if (loginResult == null ? void 0 : loginResult.error) {
+        if (loginResult?.error) {
           throw new Error(loginResult.error.message || "\u533F\u540D\u8EAB\u4EFD\u8BA4\u8BC1\u5931\u8D25");
         }
-      } else if ((_b = state.cloud.auth) == null ? void 0 : _b.anonymousAuthProvider) {
+      } else if (state.cloud.auth?.anonymousAuthProvider) {
         await state.cloud.auth.anonymousAuthProvider().signIn();
       }
       state.cloud.ready = true;
       state.cloud.message = `CloudBase \u5DF2\u8FDE\u63A5\uFF1A${cloudConfig.envId}`;
     } catch (error) {
       state.cloud.ready = false;
-      state.cloud.message = `CloudBase \u521D\u59CB\u5316\u5931\u8D25\uFF1A${(error == null ? void 0 : error.message) || "\u672A\u77E5\u9519\u8BEF"}`;
+      state.cloud.message = `CloudBase \u521D\u59CB\u5316\u5931\u8D25\uFF1A${error?.message || "\u672A\u77E5\u9519\u8BEF"}`;
       console.warn("[CloudBase]", error);
     }
   }
   async function loadCloudBaseSdk() {
     if (window.cloudbase) return window.cloudbase;
-    const module = await Promise.resolve().then(() => __toESM(__require(CLOUDBASE_SDK_URL)));
+    const module = await import(CLOUDBASE_SDK_URL);
     window.cloudbase = module.default || window.cloudbase;
     if (!window.cloudbase) throw new Error("CloudBase SDK load failed");
     return window.cloudbase;
   }
   async function callCloud(action, payload = {}) {
-    var _a, _b, _c, _d, _e;
-    if (!state.cloud.ready || !((_a = state.cloud.app) == null ? void 0 : _a.callFunction)) {
+    if (!state.cloud.ready || !state.cloud.app?.callFunction) {
       throw new Error("CloudBase is not ready");
     }
     const result = await Promise.race([
       state.cloud.app.callFunction({
-        name: ((_b = cloudConfig.functions) == null ? void 0 : _b.membershipApi) || "membershipApi",
+        name: cloudConfig.functions?.membershipApi || "membershipApi",
         data: {
           action,
-          payload: __spreadProps(__spreadValues({}, payload), {
-            sessionToken: ((_c = state.session) == null ? void 0 : _c.token) || payload.sessionToken || ""
-          })
+          payload: {
+            ...payload,
+            sessionToken: state.session?.token || payload.sessionToken || ""
+          }
         }
       }),
       new Promise((_, reject) => {
         window.setTimeout(() => reject(new Error("\u4E91\u7AEF\u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5")), 15e3);
       })
     ]);
-    if (!((_d = result.result) == null ? void 0 : _d.ok)) {
-      throw new Error(((_e = result.result) == null ? void 0 : _e.message) || "CloudBase request failed");
+    if (!result.result?.ok) {
+      throw new Error(result.result?.message || "CloudBase request failed");
     }
     return result.result;
   }
@@ -214,6 +169,9 @@
     currentStoreName: document.querySelector("#currentStoreName"),
     currentStaffName: document.querySelector("#currentStaffName"),
     logoutButton: document.querySelector("#logoutButton"),
+    syncStatus: document.querySelector("#syncStatus"),
+    syncStatusText: document.querySelector("#syncStatusText"),
+    refreshData: document.querySelector("#refreshData"),
     navItems: document.querySelectorAll(".nav-item"),
     pageTitle: document.querySelector("#pageTitle"),
     views: {
@@ -342,9 +300,7 @@
       state.session = null;
       const shouldSeedDemoData = !cloudConfig.enabled;
       state.members = shouldSeedDemoData ? [createMember("\u793A\u4F8B\u4F1A\u5458", "13800000000", "AW0001", 100, "\u5C11\u51B0\u4E09\u5206\u7CD6", store.id)] : [];
-      state.records = shouldSeedDemoData ? [
-        createRecord(state.members[0].id, "recharge", 100, 100, "\u5F00\u5361\u5145\u503C")
-      ] : [];
+      state.records = shouldSeedDemoData ? [createRecord(state.members[0].id, "recharge", 100, 100, "\u5F00\u5361\u5145\u503C")] : [];
       state.categories = createDefaultCategories(store.id);
       state.products = createDefaultProducts(store.id);
       state.orders = [];
@@ -367,7 +323,7 @@
       state.refunds = normalizeRefunds(parsed.refunds, defaultStoreId);
       state.settings = normalizeSettings(parsed.settings);
       state.records = state.records.map(normalizeRecord);
-    } catch (e) {
+    } catch {
       const store = createStore("\u7231\u5A03\u62AB\u8428\u5E97", PRIMARY_STORE_ID);
       state.stores = [store];
       state.staff = cloudConfig.enabled ? [] : [createStaff("\u5E97\u957F", "13800000000", "manager", store.id)];
@@ -396,13 +352,12 @@
     };
   }
   function saveState(options = {}) {
-    var _a;
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify(serializeState())
     );
     if (options.sync !== false) localDataRevision += 1;
-    if (options.sync !== false && state.cloud.ready && ((_a = state.session) == null ? void 0 : _a.token) && !state.cloud.booting) {
+    if (options.sync !== false && state.cloud.ready && state.session?.token && !state.cloud.booting) {
       scheduleCloudSave();
     }
     if (options.sync !== false && state.localApi.ready && !state.cloud.booting) {
@@ -424,7 +379,6 @@
     state.settings = normalizeSettings(data.settings);
   }
   async function syncFromCloud() {
-    var _a;
     if (state.localApi.ready) {
       try {
         const result = await callLocalApi("GET");
@@ -441,7 +395,7 @@
       }
       return;
     }
-    if (!state.cloud.ready || !((_a = state.session) == null ? void 0 : _a.token)) return;
+    if (!state.cloud.ready || !state.session?.token) return;
     try {
       const result = await callCloud("getStoreData");
       if (result.data) {
@@ -454,18 +408,65 @@
         if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
         saveState({ sync: false });
         state.cloud.message = "CloudBase \u6570\u636E\u5DF2\u540C\u6B65";
+        markSyncSuccess();
       }
     } catch (error) {
-      state.cloud.message = `CloudBase \u540C\u6B65\u5931\u8D25\uFF1A${(error == null ? void 0 : error.message) || "\u672A\u77E5\u9519\u8BEF"}`;
+      state.cloud.message = `CloudBase \u540C\u6B65\u5931\u8D25\uFF1A${error?.message || "\u672A\u77E5\u9519\u8BEF"}`;
+      if (handleSessionFailure(error)) return;
+      markSyncFailure(error);
       console.warn("[CloudBase sync]", error);
     }
+  }
+  function isSessionFailure(error) {
+    const message = String(error?.message || "");
+    return /登录状态.*(?:无效|过期)|请重新登录/.test(message);
+  }
+  function handleSessionFailure(error) {
+    if (!isSessionFailure(error)) return false;
+    if (localRefreshTimer) {
+      clearInterval(localRefreshTimer);
+      localRefreshTimer = null;
+    }
+    state.session = null;
+    saveState({ sync: false });
+    showLogin();
+    setLoginHint(error.message || "\u767B\u5F55\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u3002", "error");
+    return true;
+  }
+  function formatSyncTime(value) {
+    if (!value) return "\u5C1A\u672A\u540C\u6B65";
+    return new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false
+    }).format(value);
+  }
+  function renderSyncStatus(mode = "success", message = "") {
+    if (!els.syncStatus || !els.syncStatusText) return;
+    els.syncStatus.classList.toggle("is-error", mode === "error");
+    els.syncStatus.classList.toggle("is-connecting", mode === "connecting");
+    els.syncStatusText.textContent = message || `\u4E91\u7AEF\u5DF2\u540C\u6B65 \xB7 ${formatSyncTime(lastSuccessfulSyncAt)}`;
+    if (els.refreshData) els.refreshData.disabled = mode === "connecting";
+  }
+  function markSyncSuccess() {
+    lastSuccessfulSyncAt = /* @__PURE__ */ new Date();
+    syncFailureCount = 0;
+    renderSyncStatus("success");
+  }
+  function markSyncFailure(error) {
+    syncFailureCount += 1;
+    const reason = error?.message || "\u7F51\u7EDC\u5F02\u5E38";
+    renderSyncStatus(
+      "error",
+      `\u540C\u6B65\u5931\u8D25\uFF08${syncFailureCount} \u6B21\uFF09\xB7 \u4E0A\u6B21\u6210\u529F ${formatSyncTime(lastSuccessfulSyncAt)} \xB7 ${reason}`
+    );
   }
   function scheduleCloudSave() {
     clearTimeout(cloudSaveTimer);
     cloudSaveTimer = setTimeout(pushCloudState, 500);
   }
   async function pushCloudState() {
-    var _a;
     cloudSaveTimer = null;
     if (cloudSaveInFlight) {
       scheduleCloudSave();
@@ -487,7 +488,7 @@
         if (localDataRevision > savedRevision) scheduleCloudSave();
       }
     }
-    if (!state.cloud.ready || !((_a = state.session) == null ? void 0 : _a.token)) {
+    if (!state.cloud.ready || !state.session?.token) {
       cloudSaveInFlight = false;
       return false;
     }
@@ -536,7 +537,7 @@
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
   }
-  function createMember(name, phone, card, balance, note, storeId = ((_a) => (_a = getCurrentStore()) == null ? void 0 : _a.id)()) {
+  function createMember(name, phone, card, balance, note, storeId = getCurrentStore()?.id) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     return {
       id: createId("member"),
@@ -550,7 +551,7 @@
       updatedAt: now
     };
   }
-  function createCategory(name, storeId = ((_a) => (_a = getCurrentStore()) == null ? void 0 : _a.id)()) {
+  function createCategory(name, storeId = getCurrentStore()?.id) {
     return {
       id: createId("category"),
       storeId,
@@ -566,7 +567,7 @@
     description = "",
     image = "",
     active = true,
-    storeId = ((_a) => (_a = getCurrentStore()) == null ? void 0 : _a.id)()
+    storeId = getCurrentStore()?.id
   }) {
     return {
       id: createId("product"),
@@ -625,12 +626,11 @@
     ];
   }
   function createRecord(memberId, type, amount, balanceAfter, note, bonusAmount = 0) {
-    var _a, _b, _c;
     return {
       id: createId("record"),
       memberId,
-      storeId: ((_a = getMember(memberId)) == null ? void 0 : _a.storeId) || ((_b = getCurrentStore()) == null ? void 0 : _b.id),
-      staffId: ((_c = state.session) == null ? void 0 : _c.staffId) || null,
+      storeId: getMember(memberId)?.storeId || getCurrentStore()?.id,
+      staffId: state.session?.staffId || null,
       type,
       amount: Number(amount),
       bonusAmount: Number(bonusAmount) || 0,
@@ -672,7 +672,7 @@
     return String(phone || "").replace(/\D/g, "");
   }
   function normalizeSession(session) {
-    if (!(session == null ? void 0 : session.staffId) || !(session == null ? void 0 : session.storeId) || !(session == null ? void 0 : session.token) || Number((session == null ? void 0 : session.expiresAt) || 0) <= Date.now() || session.authVersion !== CLOUD_SESSION_VERSION) return null;
+    if (!session?.staffId || !session?.storeId || !session?.token || Number(session?.expiresAt || 0) <= Date.now() || session.authVersion !== CLOUD_SESSION_VERSION) return null;
     return {
       staffId: session.staffId,
       storeId: session.storeId,
@@ -694,23 +694,24 @@
     };
   }
   function normalizeMember(member, defaultStoreId) {
-    return __spreadProps(__spreadValues({}, member), {
+    return {
+      ...member,
       storeId: member.storeId || defaultStoreId,
       phone: normalizePhone(member.phone),
       balance: Number(member.balance) || 0,
       updatedAt: member.updatedAt || member.createdAt || (/* @__PURE__ */ new Date()).toISOString()
-    });
+    };
   }
   function normalizeRecord(record) {
-    var _a, _b;
-    return __spreadProps(__spreadValues({}, record), {
-      storeId: record.storeId || ((_a = getMember(record.memberId)) == null ? void 0 : _a.storeId) || ((_b = state.stores[0]) == null ? void 0 : _b.id),
+    return {
+      ...record,
+      storeId: record.storeId || getMember(record.memberId)?.storeId || state.stores[0]?.id,
       staffId: record.staffId || null,
       amount: Number(record.amount) || 0,
       bonusAmount: Number(record.bonusAmount) || 0,
       balanceAfter: Number(record.balanceAfter) || 0,
       createdAt: record.createdAt || (/* @__PURE__ */ new Date()).toISOString()
-    });
+    };
   }
   function normalizeCategories(categories, defaultStoreId) {
     if (!Array.isArray(categories) || !categories.length) return [];
@@ -743,7 +744,6 @@
   function normalizeOrders(orders, defaultStoreId) {
     if (!Array.isArray(orders)) return [];
     return orders.map((order) => {
-      var _a, _b;
       const items = Array.isArray(order.items) ? order.items : [];
       const normalizedItems = items.map((item) => ({
         productId: item.productId || "",
@@ -788,8 +788,8 @@
         deliveryRecipientPhone: normalizePhone(order.deliveryRecipientPhone),
         deliveryDate: order.deliveryDate || "",
         deliveryTime: order.deliveryTime || "",
-        deliveryLatitude: (_a = order.deliveryLatitude) != null ? _a : null,
-        deliveryLongitude: (_b = order.deliveryLongitude) != null ? _b : null,
+        deliveryLatitude: order.deliveryLatitude ?? null,
+        deliveryLongitude: order.deliveryLongitude ?? null,
         deliveryDistanceKm: Number.isFinite(Number(order.deliveryDistanceKm)) ? Number(order.deliveryDistanceKm) : null,
         fulfillmentLabel: order.fulfillmentLabel || buildFulfillmentLabel(order),
         note: order.note || "",
@@ -876,7 +876,7 @@
     return els.recordTypeFilter.value === "all" ? "\u5168\u90E8\u7C7B\u578B" : recordTypeLabel(els.recordTypeFilter.value);
   }
   function buildUnifiedTransactions() {
-    const orderItemsText = (order) => ((order == null ? void 0 : order.items) || []).map((item) => `${item.name}\xD7${item.quantity}`).join("\uFF0C");
+    const orderItemsText = (order) => (order?.items || []).map((item) => `${item.name}\xD7${item.quantity}`).join("\uFF0C");
     const storedRecords = getStoreRecords();
     const existingOrderPaymentKeys = new Set(
       storedRecords.filter((record) => ["spend", "order_payment"].includes(record.type)).flatMap((record) => [
@@ -892,9 +892,9 @@
         type: record.type,
         createdAt: record.createdAt,
         memberId: record.memberId,
-        memberName: (member == null ? void 0 : member.name) || record.memberName || "\u5DF2\u5220\u9664\u4F1A\u5458",
-        memberPhone: (member == null ? void 0 : member.phone) || record.memberPhone || "",
-        memberCard: (member == null ? void 0 : member.card) || record.memberCard || "",
+        memberName: member?.name || record.memberName || "\u5DF2\u5220\u9664\u4F1A\u5458",
+        memberPhone: member?.phone || record.memberPhone || "",
+        memberCard: member?.card || record.memberCard || "",
         amount: Number(record.amount) || 0,
         bonusAmount: Number(record.bonusAmount) || 0,
         balanceAfter: record.balanceAfter === null || record.balanceAfter === void 0 ? null : Number(record.balanceAfter),
@@ -905,7 +905,6 @@
       };
     });
     const orderPayments = getStoreOrders().filter((order) => Number(order.paidAmount || 0) > 0 && !existingOrderPaymentKeys.has(`id:${order.id}`) && !existingOrderPaymentKeys.has(`no:${order.orderNo}`)).map((order) => {
-      var _a;
       const member = getMember(order.memberId);
       return {
         id: `order_payment_${order.id}`,
@@ -913,45 +912,40 @@
         type: "order_payment",
         createdAt: order.createdAt,
         memberId: order.memberId || "",
-        memberName: (member == null ? void 0 : member.name) || order.customerName || "\u987E\u5BA2",
-        memberPhone: (member == null ? void 0 : member.phone) || order.customerPhone || "",
-        memberCard: (member == null ? void 0 : member.card) || "",
+        memberName: member?.name || order.customerName || "\u987E\u5BA2",
+        memberPhone: member?.phone || order.customerPhone || "",
+        memberCard: member?.card || "",
         amount: Number(order.paidAmount || order.totalAmount || 0),
         bonusAmount: 0,
-        balanceAfter: (_a = member == null ? void 0 : member.balance) != null ? _a : null,
+        balanceAfter: member?.balance ?? null,
         paymentMethod: order.paymentMethod || "",
         orderNo: order.orderNo,
         itemsText: orderItemsText(order),
         note: paymentMethodLabel(order.paymentMethod)
       };
     });
-    const refundRows = state.refunds.filter((refund) => {
-      var _a;
-      return refund.storeId === ((_a = getCurrentStore()) == null ? void 0 : _a.id);
-    }).map((refund) => {
-      var _a;
+    const refundRows = state.refunds.filter((refund) => refund.storeId === getCurrentStore()?.id).map((refund) => {
       const order = getOrder(refund.orderId);
-      const member = getMember(refund.memberId || (order == null ? void 0 : order.memberId));
+      const member = getMember(refund.memberId || order?.memberId);
       return {
         id: `refund_${refund.id}`,
         source: "refund",
         type: "order_refund",
         createdAt: refund.createdAt,
-        memberId: refund.memberId || (order == null ? void 0 : order.memberId) || "",
-        memberName: (member == null ? void 0 : member.name) || (order == null ? void 0 : order.customerName) || "\u987E\u5BA2",
-        memberPhone: (member == null ? void 0 : member.phone) || (order == null ? void 0 : order.customerPhone) || "",
-        memberCard: (member == null ? void 0 : member.card) || "",
+        memberId: refund.memberId || order?.memberId || "",
+        memberName: member?.name || order?.customerName || "\u987E\u5BA2",
+        memberPhone: member?.phone || order?.customerPhone || "",
+        memberCard: member?.card || "",
         amount: Number(refund.amount) || 0,
         bonusAmount: 0,
-        balanceAfter: (_a = member == null ? void 0 : member.balance) != null ? _a : null,
-        paymentMethod: refund.method || (order == null ? void 0 : order.paymentMethod) || "",
-        orderNo: (order == null ? void 0 : order.orderNo) || "",
+        balanceAfter: member?.balance ?? null,
+        paymentMethod: refund.method || order?.paymentMethod || "",
+        orderNo: order?.orderNo || "",
         itemsText: orderItemsText(order),
-        note: refund.reason || (order == null ? void 0 : order.refundReason) || ""
+        note: refund.reason || order?.refundReason || ""
       };
     });
     const cancelledOrders = getStoreOrders().filter((order) => order.status === "cancelled").map((order) => {
-      var _a;
       const member = getMember(order.memberId);
       return {
         id: `order_cancel_${order.id}`,
@@ -959,12 +953,12 @@
         type: "order_cancel",
         createdAt: order.updatedAt || order.createdAt,
         memberId: order.memberId || "",
-        memberName: (member == null ? void 0 : member.name) || order.customerName || "\u987E\u5BA2",
-        memberPhone: (member == null ? void 0 : member.phone) || order.customerPhone || "",
-        memberCard: (member == null ? void 0 : member.card) || "",
+        memberName: member?.name || order.customerName || "\u987E\u5BA2",
+        memberPhone: member?.phone || order.customerPhone || "",
+        memberCard: member?.card || "",
         amount: 0,
         bonusAmount: 0,
-        balanceAfter: (_a = member == null ? void 0 : member.balance) != null ? _a : null,
+        balanceAfter: member?.balance ?? null,
         paymentMethod: order.paymentMethod || "",
         orderNo: order.orderNo,
         itemsText: orderItemsText(order),
@@ -1023,24 +1017,16 @@
     return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
   }
   function getCurrentStore() {
-    return state.stores.find((store) => {
-      var _a;
-      return store.id === ((_a = state.session) == null ? void 0 : _a.storeId);
-    }) || state.stores[0];
+    return state.stores.find((store) => store.id === state.session?.storeId) || state.stores[0];
   }
   function getCurrentStaff() {
-    return state.staff.find((staffer) => {
-      var _a;
-      return staffer.id === ((_a = state.session) == null ? void 0 : _a.staffId);
-    }) || null;
+    return state.staff.find((staffer) => staffer.id === state.session?.staffId) || null;
   }
   function currentStaffIsManager() {
-    var _a;
-    return ((_a = getCurrentStaff()) == null ? void 0 : _a.role) === "manager";
+    return getCurrentStaff()?.role === "manager";
   }
   function getStoreMembers() {
-    var _a;
-    const storeId = ((_a = getCurrentStore()) == null ? void 0 : _a.id) || PRIMARY_STORE_ID;
+    const storeId = getCurrentStore()?.id || PRIMARY_STORE_ID;
     return Array.from(
       new Map(
         state.members.filter((member) => member.storeId === storeId).map((member) => [member.id, member])
@@ -1048,23 +1034,19 @@
     );
   }
   function getStoreRecords() {
-    var _a;
-    const storeId = ((_a = getCurrentStore()) == null ? void 0 : _a.id) || PRIMARY_STORE_ID;
+    const storeId = getCurrentStore()?.id || PRIMARY_STORE_ID;
     return state.records.filter((record) => record.storeId === storeId);
   }
   function getStoreStaff() {
-    var _a;
-    const storeId = (_a = getCurrentStore()) == null ? void 0 : _a.id;
+    const storeId = getCurrentStore()?.id;
     return state.staff.filter((staffer) => staffer.storeId === storeId);
   }
   function getStoreProducts() {
-    var _a;
-    const storeId = ((_a = getCurrentStore()) == null ? void 0 : _a.id) || PRIMARY_STORE_ID;
+    const storeId = getCurrentStore()?.id || PRIMARY_STORE_ID;
     return state.products.filter((product) => product.storeId === storeId && !product.deletedAt);
   }
   function getStoreOrders() {
-    var _a;
-    const storeId = ((_a = getCurrentStore()) == null ? void 0 : _a.id) || PRIMARY_STORE_ID;
+    const storeId = getCurrentStore()?.id || PRIMARY_STORE_ID;
     return state.orders.filter((order) => order.storeId === storeId);
   }
   function getOrder(orderId) {
@@ -1088,8 +1070,7 @@
     renderOrderSoundSetting();
   }
   function getAlertableOrders() {
-    var _a;
-    const storeId = ((_a = getCurrentStore()) == null ? void 0 : _a.id) || PRIMARY_STORE_ID;
+    const storeId = getCurrentStore()?.id || PRIMARY_STORE_ID;
     return state.orders.filter(
       (order) => order.storeId === storeId && order.status !== "pending_payment"
     );
@@ -1196,38 +1177,44 @@
   }
   function startLocalRefresh() {
     if (!state.localApi.ready && !state.cloud.ready || localRefreshTimer) return;
-    localRefreshTimer = setInterval(async () => {
-      if (!["orders", "dashboard", "members", "records", "products", "settings"].includes(state.activeView)) return;
-      if (remoteRefreshInFlight || cloudSaveTimer || cloudSaveInFlight || state.cloud.booting) return;
-      remoteRefreshInFlight = true;
-      const refreshRevision = localDataRevision;
-      try {
-        const result = state.localApi.ready ? await callLocalApi("GET") : await callCloud("getStoreData");
-        if (result.data && refreshRevision === localDataRevision && !cloudSaveTimer && !cloudSaveInFlight) {
-          const deliveryDraft = deliverySettingsDirty ? state.settings.delivery : null;
-          const currentSession = state.session;
-          const currentStaff = getCurrentStaff();
-          const currentStore = getCurrentStore();
-          applyData(result.data, { keepSession: true });
-          if (deliveryDraft) state.settings.delivery = deliveryDraft;
-          state.session = currentSession;
-          if (currentStore && !state.stores.some((store) => store.id === currentStore.id)) state.stores.push(currentStore);
-          if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
-          saveState({ sync: false });
-          render();
-          processOrderAlerts();
-        }
-      } catch (error) {
-        console.warn("[Remote refresh]", error);
-      } finally {
-        remoteRefreshInFlight = false;
+    localRefreshTimer = setInterval(() => refreshRemoteData(), 1500);
+  }
+  async function refreshRemoteData(options = {}) {
+    if (!options.manual && !["orders", "dashboard", "members", "records", "products", "settings"].includes(state.activeView)) return;
+    if (remoteRefreshInFlight || cloudSaveTimer || cloudSaveInFlight || state.cloud.booting || !state.session?.token) return;
+    remoteRefreshInFlight = true;
+    if (options.manual) renderSyncStatus("connecting", "\u6B63\u5728\u5237\u65B0\u4E91\u7AEF\u6570\u636E\u2026");
+    const refreshRevision = localDataRevision;
+    try {
+      const result = state.localApi.ready ? await callLocalApi("GET") : await callCloud("getStoreData");
+      if (result.data && refreshRevision === localDataRevision && !cloudSaveTimer && !cloudSaveInFlight) {
+        const deliveryDraft = deliverySettingsDirty ? state.settings.delivery : null;
+        const currentSession = state.session;
+        const currentStaff = getCurrentStaff();
+        const currentStore = getCurrentStore();
+        applyData(result.data, { keepSession: true });
+        if (deliveryDraft) state.settings.delivery = deliveryDraft;
+        state.session = currentSession;
+        if (currentStore && !state.stores.some((store) => store.id === currentStore.id)) state.stores.push(currentStore);
+        if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
+        saveState({ sync: false });
+        markSyncSuccess();
+        render();
+        processOrderAlerts();
       }
-    }, 1500);
+    } catch (error) {
+      if (!handleSessionFailure(error)) {
+        markSyncFailure(error);
+        console.warn("[Remote refresh]", error);
+      }
+    } finally {
+      remoteRefreshInFlight = false;
+    }
   }
   function renderSession() {
     const store = getCurrentStore();
     const staffer = getCurrentStaff();
-    els.currentStoreName.textContent = (store == null ? void 0 : store.name) || "\u672A\u9009\u62E9\u95E8\u5E97";
+    els.currentStoreName.textContent = store?.name || "\u672A\u9009\u62E9\u95E8\u5E97";
     els.currentStaffName.textContent = staffer ? `${staffer.name} \xB7 ${staffer.role === "manager" ? "\u5E97\u957F" : "\u5E97\u5458"}` : "\u672A\u767B\u5F55";
     document.querySelectorAll("[data-manager-only]").forEach((section) => {
       section.hidden = !currentStaffIsManager();
@@ -1372,7 +1359,7 @@
     return [...getStoreOrders()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).filter((order) => {
       const itemText = order.items.map((item) => item.name).join(" ");
       const member = getMember(order.memberId);
-      const text = `${order.orderNo} ${order.customerName} ${order.customerPhone} ${(member == null ? void 0 : member.name) || ""} ${(member == null ? void 0 : member.phone) || ""} ${(member == null ? void 0 : member.card) || ""} ${itemText}`.toLowerCase();
+      const text = `${order.orderNo} ${order.customerName} ${order.customerPhone} ${member?.name || ""} ${member?.phone || ""} ${member?.card || ""} ${itemText}`.toLowerCase();
       return (status === "all" || order.status === status) && text.includes(keyword);
     });
   }
@@ -1535,12 +1522,11 @@
     ).join("");
   }
   function renderDeliverySettings() {
-    var _a, _b;
     const delivery = state.settings.delivery;
     els.deliveryFee.value = delivery.fee;
     els.freeDeliveryThreshold.value = delivery.freeThreshold;
-    els.storeLatitude.value = (_a = delivery.storeLatitude) != null ? _a : "";
-    els.storeLongitude.value = (_b = delivery.storeLongitude) != null ? _b : "";
+    els.storeLatitude.value = delivery.storeLatitude ?? "";
+    els.storeLongitude.value = delivery.storeLongitude ?? "";
     els.deliveryTestMode.checked = delivery.testMode;
     updateStoreLocationVerification();
     els.deliverySettingsStatus.textContent = delivery.storeLatitude === null || delivery.storeLongitude === null ? "\u8BF7\u586B\u5199\u95E8\u5E97\u7ECF\u7EAC\u5EA6\uFF0C\u4FDD\u5B58\u540E\u987E\u5BA2\u624D\u80FD\u901A\u8FC7 3 \u516C\u91CC\u914D\u9001\u8303\u56F4\u6821\u9A8C\u3002" : `${delivery.testMode ? "\u26A0 \u5F53\u524D\u4E3A\u4E34\u65F6\u6D4B\u8BD5\u6A21\u5F0F\uFF1B" : ""}\u5F53\u524D\u89C4\u5219\uFF1A3 \u516C\u91CC\u5185\u914D\u9001\uFF0C\u914D\u9001\u8D39 ${money(delivery.fee)}\uFF0C\u5546\u54C1\u6EE1 ${money(delivery.freeThreshold)} \u514D\u914D\u9001\u8D39\u3002`;
@@ -1629,7 +1615,7 @@
   function ensureSession() {
     const staffer = getCurrentStaff();
     const store = getCurrentStore();
-    if ((staffer == null ? void 0 : staffer.active) && store) {
+    if (staffer?.active && store) {
       showApp();
     } else {
       state.session = null;
@@ -1695,7 +1681,7 @@
     if (state.cloud.ready) {
       try {
         const result = await callCloud("verifyLoginCode", { phone, code });
-        state.session = normalizeSession(__spreadProps(__spreadValues({}, result.session), { authVersion: CLOUD_SESSION_VERSION }));
+        state.session = normalizeSession({ ...result.session, authVersion: CLOUD_SESSION_VERSION });
         saveState({ sync: false });
         showApp();
         syncFromCloud().then(() => render()).catch((error) => console.warn("[CloudBase post-login sync]", error));
@@ -1736,16 +1722,15 @@
   }
   function openMemberDialog(member) {
     els.memberDialogTitle.textContent = member ? "\u7F16\u8F91\u4F1A\u5458" : "\u65B0\u589E\u4F1A\u5458";
-    els.memberId.value = (member == null ? void 0 : member.id) || "";
-    els.memberName.value = (member == null ? void 0 : member.name) || "";
-    els.memberPhone.value = (member == null ? void 0 : member.phone) || "";
-    els.memberCard.value = (member == null ? void 0 : member.card) || "";
+    els.memberId.value = member?.id || "";
+    els.memberName.value = member?.name || "";
+    els.memberPhone.value = member?.phone || "";
+    els.memberCard.value = member?.card || "";
     els.memberBalance.value = member ? member.balance : 0;
-    els.memberNote.value = (member == null ? void 0 : member.note) || "";
+    els.memberNote.value = member?.note || "";
     els.memberDialog.showModal();
   }
   function saveMemberFromForm() {
-    var _a;
     const id = els.memberId.value;
     const name = els.memberName.value.trim();
     const phone = normalizePhone(els.memberPhone.value);
@@ -1757,10 +1742,7 @@
       return;
     }
     const duplicate = state.members.find(
-      (member) => {
-        var _a2;
-        return member.id !== id && member.storeId === ((_a2 = getCurrentStore()) == null ? void 0 : _a2.id) && normalizePhone(member.phone) === phone;
-      }
+      (member) => member.id !== id && member.storeId === getCurrentStore()?.id && normalizePhone(member.phone) === phone
     );
     if (duplicate) {
       alert(`\u8BE5\u624B\u673A\u53F7\u5DF2\u6CE8\u518C\u4F1A\u5458\u201C${duplicate.name}\u201D\uFF0C\u6BCF\u4E2A\u624B\u673A\u53F7\u53EA\u80FD\u6CE8\u518C\u4E00\u6B21`);
@@ -1787,7 +1769,7 @@
         state.records.push(createRecord(id, "adjust", balance - previousBalance, balance, "\u624B\u52A8\u8C03\u6574\u4F59\u989D"));
       }
     } else {
-      const member = createMember(name, phone, card, balance, note, (_a = getCurrentStore()) == null ? void 0 : _a.id);
+      const member = createMember(name, phone, card, balance, note, getCurrentStore()?.id);
       state.members.push(member);
       if (balance > 0) {
         state.records.push(createRecord(member.id, "recharge", balance, balance, "\u5F00\u5361\u521D\u59CB\u4F59\u989D"));
@@ -1879,18 +1861,17 @@
   }
   function openProductDialog(product) {
     els.productDialogTitle.textContent = product ? "\u7F16\u8F91\u5546\u54C1" : "\u65B0\u589E\u5546\u54C1";
-    els.productId.value = (product == null ? void 0 : product.id) || "";
-    els.productName.value = (product == null ? void 0 : product.name) || "";
-    els.productCategory.value = (product == null ? void 0 : product.category) || "";
+    els.productId.value = product?.id || "";
+    els.productName.value = product?.name || "";
+    els.productCategory.value = product?.category || "";
     els.productPrice.value = product ? product.price : "";
-    els.productImage.value = (product == null ? void 0 : product.image) || "";
+    els.productImage.value = product?.image || "";
     renderProductImagePreview();
-    els.productDescription.value = (product == null ? void 0 : product.description) || "";
+    els.productDescription.value = product?.description || "";
     els.productActive.checked = product ? product.active !== false : true;
     els.productDialog.showModal();
   }
   function saveProductFromForm() {
-    var _a, _b;
     const id = els.productId.value;
     const name = els.productName.value.trim();
     const category = els.productCategory.value.trim();
@@ -1903,13 +1884,10 @@
       return;
     }
     const existingCategory = state.categories.find(
-      (item) => {
-        var _a2;
-        return item.storeId === ((_a2 = getCurrentStore()) == null ? void 0 : _a2.id) && item.name === category;
-      }
+      (item) => item.storeId === getCurrentStore()?.id && item.name === category
     );
     if (!existingCategory) {
-      state.categories.push(createCategory(category, (_a = getCurrentStore()) == null ? void 0 : _a.id));
+      state.categories.push(createCategory(category, getCurrentStore()?.id));
     }
     if (id) {
       const product = state.products.find((item) => item.id === id);
@@ -1932,7 +1910,7 @@
           image,
           description,
           active,
-          storeId: (_b = getCurrentStore()) == null ? void 0 : _b.id
+          storeId: getCurrentStore()?.id
         })
       );
     }
@@ -1970,7 +1948,6 @@
     els.refundDialog.showModal();
   }
   async function confirmRefundFromForm() {
-    var _a;
     const order = getOrder(els.refundOrderId.value);
     const amount = Number(els.refundAmount.value);
     const reason = els.refundReason.value.trim();
@@ -1985,7 +1962,7 @@
       alert("\u8BF7\u586B\u5199\u9000\u6B3E\u539F\u56E0");
       return;
     }
-    if (state.cloud.ready && ((_a = state.session) == null ? void 0 : _a.token)) {
+    if (state.cloud.ready && state.session?.token) {
       const originalLabel = els.confirmRefund.textContent;
       els.confirmRefund.disabled = true;
       els.confirmRefund.textContent = method === "wechat_pay" ? "\u6B63\u5728\u539F\u8DEF\u9000\u6B3E\u2026" : "\u6B63\u5728\u9000\u6B3E\u2026";
@@ -1994,9 +1971,9 @@
         await syncFromCloud();
         els.refundDialog.close();
         render();
-        alert(method === "wechat_pay" ? `\u5FAE\u4FE1\u9000\u6B3E\u5DF2\u53D7\u7406\uFF0C\u5C06\u6309\u539F\u652F\u4ED8\u6E20\u9053\u9000\u56DE\u3002\u9000\u6B3E\u5355\u53F7\uFF1A${result.refund && result.refund.outRefundNo || "\u5904\u7406\u4E2D"}` : "\u9000\u6B3E\u5DF2\u5B8C\u6210\u5E76\u9000\u56DE\u4F1A\u5458\u4F59\u989D");
+        alert(method === "wechat_pay" ? `\u5FAE\u4FE1\u9000\u6B3E\u5DF2\u53D7\u7406\uFF0C\u5C06\u6309\u539F\u652F\u4ED8\u6E20\u9053\u9000\u56DE\u3002\u9000\u6B3E\u5355\u53F7\uFF1A${result.refund?.outRefundNo || "\u5904\u7406\u4E2D"}` : "\u9000\u6B3E\u5DF2\u5B8C\u6210\u5E76\u9000\u56DE\u4F1A\u5458\u4F59\u989D");
       } catch (error) {
-        alert(`\u9000\u6B3E\u5931\u8D25\uFF1A${(error == null ? void 0 : error.message) || "\u672A\u77E5\u9519\u8BEF"}\u3002\u8BA2\u5355\u72B6\u6001\u548C\u4F1A\u5458\u4F59\u989D\u5747\u672A\u4FEE\u6539\u3002`);
+        alert(`\u9000\u6B3E\u5931\u8D25\uFF1A${error?.message || "\u672A\u77E5\u9519\u8BEF"}\u3002\u8BA2\u5355\u72B6\u6001\u548C\u4F1A\u5458\u4F59\u989D\u5747\u672A\u4FEE\u6539\u3002`);
       } finally {
         els.confirmRefund.disabled = false;
         els.confirmRefund.textContent = originalLabel;
@@ -2012,7 +1989,7 @@
       reason,
       method,
       status: "completed",
-      staffId: ((_a = state.session) == null ? void 0 : _a.staffId) || null,
+      staffId: state.session?.staffId || null,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     state.refunds.push(refund);
@@ -2072,7 +2049,7 @@
         alert("\u5C0F\u7968\u5DF2\u53D1\u9001\u5230 POS58");
         return;
       } catch (error) {
-        alert(`\u672C\u5730\u6253\u5370\u670D\u52A1\u672A\u8FDE\u63A5\uFF0C\u672A\u6267\u884C\u6253\u5370\uFF1A${(error == null ? void 0 : error.message) || "\u672A\u77E5\u9519\u8BEF"}`);
+        alert(`\u672C\u5730\u6253\u5370\u670D\u52A1\u672A\u8FDE\u63A5\uFF0C\u672A\u6267\u884C\u6253\u5370\uFF1A${error?.message || "\u672A\u77E5\u9519\u8BEF"}`);
         return;
       } finally {
         els.confirmReceiptPrint.disabled = false;
@@ -2134,8 +2111,8 @@
   }
   function buildOrderReceiptText(order) {
     const member = getMember(order.memberId);
-    const customerName = (member == null ? void 0 : member.name) || order.customerName || "\u5FAE\u4FE1\u987E\u5BA2";
-    const customerPhone = (member == null ? void 0 : member.phone) || order.customerPhone || "";
+    const customerName = member?.name || order.customerName || "\u5FAE\u4FE1\u987E\u5BA2";
+    const customerPhone = member?.phone || order.customerPhone || "";
     const subtotal = order.items.reduce(
       (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
@@ -2151,7 +2128,7 @@
       `\u8BA2\u5355\u6765\u6E90\uFF1A${order.orderChannel === "mini_program" || order.paymentRedirect === "mini_program" ? "\u5FAE\u4FE1\u5C0F\u7A0B\u5E8F\u4E0B\u5355" : "\u5E97\u5BB6\u540E\u53F0\u4E0B\u5355"}`,
       `\u4F1A\u5458\u6635\u79F0\uFF1A${customerName}`
     ];
-    if (member == null ? void 0 : member.card) lines.push(`\u4F1A\u5458\u53F7\uFF1A${member.card}`);
+    if (member?.card) lines.push(`\u4F1A\u5458\u53F7\uFF1A${member.card}`);
     if (customerPhone) lines.push(`\u7535\u8BDD\uFF1A${customerPhone}`);
     lines.push(`\u53D6\u9910\u65B9\u5F0F\uFF1A${buildFulfillmentLabel(order)}`);
     if (order.fulfillmentType === "delivery" && order.deliveryAddress) {
@@ -2239,8 +2216,8 @@
       return;
     }
     const member = getMember(order.memberId);
-    const customerName = (member == null ? void 0 : member.name) || order.customerName || "\u5FAE\u4FE1\u987E\u5BA2";
-    const customerPhone = (member == null ? void 0 : member.phone) || order.customerPhone || "";
+    const customerName = member?.name || order.customerName || "\u5FAE\u4FE1\u987E\u5BA2";
+    const customerPhone = member?.phone || order.customerPhone || "";
     const subtotal = order.items.reduce(
       (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
@@ -2256,7 +2233,7 @@
       ${receiptLine("\u8BA2\u5355\u72B6\u6001", orderStatusLabel(order.status))}
       ${receiptLine("\u8BA2\u5355\u6765\u6E90", order.orderChannel === "mini_program" || order.paymentRedirect === "mini_program" ? "\u5FAE\u4FE1\u5C0F\u7A0B\u5E8F\u4E0B\u5355" : "\u5E97\u5BB6\u540E\u53F0\u4E0B\u5355")}
       ${receiptLine("\u4F1A\u5458\u6635\u79F0", customerName)}
-      ${(member == null ? void 0 : member.card) ? receiptLine("\u4F1A\u5458\u53F7", member.card) : ""}
+      ${member?.card ? receiptLine("\u4F1A\u5458\u53F7", member.card) : ""}
       ${customerPhone ? receiptLine("\u7535\u8BDD", customerPhone) : ""}
       ${receiptLine("\u53D6\u9910\u65B9\u5F0F", buildFulfillmentLabel(order))}
       ${order.fulfillmentType === "delivery" && order.deliveryRecipientName ? receiptLine("\u6536\u8D27\u4EBA", order.deliveryRecipientName) : ""}
@@ -2381,10 +2358,7 @@
     const totalOrderPayment = records.filter((record) => record.type === "order_payment").reduce((sum, record) => sum + record.amount, 0);
     const totalOrderRefund = records.filter((record) => record.type === "order_refund").reduce((sum, record) => sum + record.amount, 0);
     const memberNames = Array.from(
-      new Set(records.map((record) => {
-        var _a;
-        return record.memberName || ((_a = getMember(record.memberId)) == null ? void 0 : _a.name) || "\u987E\u5BA2";
-      }))
+      new Set(records.map((record) => record.memberName || getMember(record.memberId)?.name || "\u987E\u5BA2"))
     );
     const memberLabel = memberNames.length === 1 ? memberNames[0] : `${memberNames.length} \u4F4D\u4F1A\u5458`;
     const receiptHtml = `
@@ -2430,24 +2404,35 @@
       return;
     }
     const excelText = (value) => {
-      const text = String(value != null ? value : "");
+      const text = String(value ?? "");
       const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
       return escapeHtml(safe);
     };
     const rows = records.map((record) => `
-    <tr><td>${excelText(formatFullTime(record.createdAt))}</td><td>${excelText(recordTypeLabel(record.type))}</td>
-    <td>${excelText(record.memberName || "\u987E\u5BA2")}</td><td style="mso-number-format:'\\@'">${excelText(record.memberCard)}</td>
-    <td style="mso-number-format:'\\@'">${excelText(record.memberPhone)}</td><td style="mso-number-format:'\\@'">${excelText(record.orderNo)}</td>
-    <td>${excelText(paymentMethodLabel(record.paymentMethod))}</td><td>${excelText(record.itemsText)}</td>
-    <td class="number">${Number(record.amount || 0)}</td><td class="number">${Number(record.bonusAmount || 0)}</td>
-    <td class="number">${record.balanceAfter === null || record.balanceAfter === void 0 ? "" : Number(record.balanceAfter)}</td><td>${excelText(record.note)}</td></tr>`).join("");
+    <tr>
+      <td>${excelText(formatFullTime(record.createdAt))}</td>
+      <td>${excelText(recordTypeLabel(record.type))}</td>
+      <td>${excelText(record.memberName || "\u987E\u5BA2")}</td>
+      <td style="mso-number-format:'\\@'">${excelText(record.memberCard)}</td>
+      <td style="mso-number-format:'\\@'">${excelText(record.memberPhone)}</td>
+      <td style="mso-number-format:'\\@'">${excelText(record.orderNo)}</td>
+      <td>${excelText(paymentMethodLabel(record.paymentMethod))}</td>
+      <td>${excelText(record.itemsText)}</td>
+      <td class="number">${Number(record.amount || 0)}</td>
+      <td class="number">${Number(record.bonusAmount || 0)}</td>
+      <td class="number">${record.balanceAfter === null || record.balanceAfter === void 0 ? "" : Number(record.balanceAfter)}</td>
+      <td>${excelText(record.note)}</td>
+    </tr>`).join("");
     const workbook = `<!doctype html><html><head><meta charset="UTF-8"><style>
     table{border-collapse:collapse;font-family:Arial,"Microsoft YaHei",sans-serif;font-size:11pt}
     th,td{border:1px solid #999;padding:6px;vertical-align:top}th{background:#0f8a6b;color:#fff}
     .title{font-size:16pt;font-weight:bold;background:#e8f5f1;color:#111}.meta{background:#f3f6f5}.number{mso-number-format:'0.00'}
-    </style></head><body><table><tr><td class="title" colspan="12">\u7231\u5A03\u62AB\u8428\u5E97\u6D41\u6C34\u660E\u7EC6</td></tr>
+  </style></head><body><table>
+    <tr><td class="title" colspan="12">\u7231\u5A03\u62AB\u8428\u5E97\u6D41\u6C34\u660E\u7EC6</td></tr>
     <tr><td class="meta" colspan="12">\u7B5B\u9009\u6761\u4EF6\uFF1A\u4F1A\u5458\u641C\u7D22 ${excelText(recordSearchLabel())}\uFF1B\u7C7B\u578B ${excelText(recordTypeFilterLabel())}\uFF1B\u65E5\u671F ${excelText(recordDateRangeLabel())}\uFF1B\u5171 ${records.length} \u7B14</td></tr>
-    <tr><th>\u4EA4\u6613\u65F6\u95F4</th><th>\u7C7B\u578B</th><th>\u4F1A\u5458\u540D\u79F0</th><th>\u4F1A\u5458\u53F7</th><th>\u624B\u673A\u53F7</th><th>\u8BA2\u5355\u53F7</th><th>\u652F\u4ED8\u65B9\u5F0F</th><th>\u5546\u54C1</th><th>\u91D1\u989D</th><th>\u8D60\u9001\u91D1\u989D</th><th>\u4EA4\u6613\u540E\u4F59\u989D</th><th>\u5907\u6CE8</th></tr>${rows}</table></body></html>`;
+    <tr><th>\u4EA4\u6613\u65F6\u95F4</th><th>\u7C7B\u578B</th><th>\u4F1A\u5458\u540D\u79F0</th><th>\u4F1A\u5458\u53F7</th><th>\u624B\u673A\u53F7</th><th>\u8BA2\u5355\u53F7</th><th>\u652F\u4ED8\u65B9\u5F0F</th><th>\u5546\u54C1</th><th>\u91D1\u989D</th><th>\u8D60\u9001\u91D1\u989D</th><th>\u4EA4\u6613\u540E\u4F59\u989D</th><th>\u5907\u6CE8</th></tr>
+    ${rows}
+  </table></body></html>`;
     const blob = new Blob(["\uFEFF", workbook], { type: "application/vnd.ms-excel;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -2479,7 +2464,7 @@
         saveState();
         render();
         alert("\u5BFC\u5165\u6210\u529F");
-      } catch (e) {
+      } catch {
         alert("\u5BFC\u5165\u5931\u8D25\uFF0C\u8BF7\u9009\u62E9\u7531\u672C\u7CFB\u7EDF\u5BFC\u51FA\u7684 JSON \u6587\u4EF6");
       }
     };
@@ -2503,6 +2488,7 @@
     saveState();
     showLogin();
   });
+  els.refreshData?.addEventListener("click", () => refreshRemoteData({ manual: true }));
   document.querySelectorAll("[data-view-jump]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.viewJump));
   });
@@ -2518,10 +2504,7 @@
   });
   els.confirmRefund.addEventListener("click", confirmRefundFromForm);
   document.querySelectorAll("[data-dialog-close]").forEach((button) => {
-    button.addEventListener("click", () => {
-      var _a;
-      return (_a = button.closest("dialog")) == null ? void 0 : _a.close("cancel");
-    });
+    button.addEventListener("click", () => button.closest("dialog")?.close("cancel"));
   });
   els.orderSearch.addEventListener("input", renderOrders);
   els.orderStatusFilter.addEventListener("change", renderOrders);
@@ -2543,8 +2526,7 @@
     els.memberPrintEndDate.disabled = disabled;
   });
   els.memberPrintForm.addEventListener("submit", (event) => {
-    var _a;
-    if (((_a = event.submitter) == null ? void 0 : _a.value) === "cancel") return;
+    if (event.submitter?.value === "cancel") return;
     event.preventDefault();
     const memberId = els.memberPrintId.value;
     if (els.memberPrintAllDates.checked) {
@@ -2574,13 +2556,11 @@
   els.confirmReceiptPrint.addEventListener("click", printReceiptPreview);
   els.exportData.addEventListener("click", exportData);
   els.importData.addEventListener("change", (event) => {
-    var _a;
-    const file = (_a = event.target.files) == null ? void 0 : _a[0];
+    const file = event.target.files?.[0];
     if (file) importData(file);
     event.target.value = "";
   });
   els.quickTransactionForm.addEventListener("submit", (event) => {
-    var _a;
     event.preventDefault();
     const record = addTransaction(
       els.quickMember.value,
@@ -2591,7 +2571,7 @@
     if (record) {
       els.quickAmount.value = "";
       els.quickNote.value = "";
-      if (((_a = event.submitter) == null ? void 0 : _a.value) === "print") {
+      if (event.submitter?.value === "print") {
         openMemberPrintDialog(record.memberId);
       }
     }
@@ -2699,7 +2679,6 @@
     renderBonusRules();
   });
   els.staffForm.addEventListener("submit", async (event) => {
-    var _a;
     event.preventDefault();
     if (!currentStaffIsManager()) {
       alert("\u53EA\u6709\u5E97\u957F\u53EF\u4EE5\u7BA1\u7406\u5E97\u5458");
@@ -2716,14 +2695,13 @@
       alert("\u8FD9\u4E2A\u624B\u673A\u53F7\u5DF2\u7ECF\u662F\u5F53\u524D\u95E8\u5E97\u5E97\u5458");
       return;
     }
-    state.staff.push(createStaff(name, phone, role, (_a = getCurrentStore()) == null ? void 0 : _a.id));
+    state.staff.push(createStaff(name, phone, role, getCurrentStore()?.id));
     els.staffName.value = "";
     els.staffPhone.value = "";
     els.staffRole.value = "staff";
     await saveStaffAndSync();
   });
   els.staffList.addEventListener("click", async (event) => {
-    var _a;
     const button = event.target.closest("[data-toggle-staff]");
     if (!button) return;
     if (!currentStaffIsManager()) {
@@ -2732,7 +2710,7 @@
     }
     const staffer = state.staff.find((item) => item.id === button.dataset.toggleStaff);
     if (!staffer) return;
-    if (staffer.id === ((_a = state.session) == null ? void 0 : _a.staffId) && staffer.active) {
+    if (staffer.id === state.session?.staffId && staffer.active) {
       alert("\u4E0D\u80FD\u505C\u7528\u5F53\u524D\u767B\u5F55\u7684\u8D26\u53F7");
       return;
     }
@@ -2776,7 +2754,7 @@
     const toggleButton = event.target.closest("[data-product-toggle]");
     const soldoutButton = event.target.closest("[data-product-soldout]");
     const deleteButton = event.target.closest("[data-product-delete]");
-    const id = (editButton == null ? void 0 : editButton.dataset.productEdit) || (toggleButton == null ? void 0 : toggleButton.dataset.productToggle) || (soldoutButton == null ? void 0 : soldoutButton.dataset.productSoldout) || (deleteButton == null ? void 0 : deleteButton.dataset.productDelete);
+    const id = editButton?.dataset.productEdit || toggleButton?.dataset.productToggle || soldoutButton?.dataset.productSoldout || deleteButton?.dataset.productDelete;
     if (!id) return;
     const product = state.products.find((item) => item.id === id);
     if (!product) return;

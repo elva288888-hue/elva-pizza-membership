@@ -203,6 +203,53 @@ test("membership balance order deducts balance and records a paid order", async 
   assert.equal(database.collections.get("transactions").size, 1);
 });
 
+test("phone authorization and normal ordering do not create a member", async () => {
+  const seed = baseSeed();
+  seed.members = [];
+  const { main, database } = loadMembershipApi(seed, "openid-nonmember");
+
+  const authorized = await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code", storeId: "store_aiwa_pizza_main" },
+  });
+  assert.equal(authorized.ok, true);
+  assert.equal(authorized.member, null);
+  assert.equal(database.collections.get("members").size, 0);
+
+  const order = await main({
+    action: "createMiniProgramPendingOrder",
+    payload: {
+      storeId: "store_aiwa_pizza_main",
+      customer: { phone: "13900000000", name: "普通顾客" },
+      items: [{ productId: "product-1", quantity: 1 }],
+      fulfillmentType: "pickup",
+      pickupMode: "now",
+      paymentMethod: "wechat_pay",
+    },
+  });
+  assert.equal(order.ok, true);
+  assert.equal(order.order.memberId, "");
+  assert.equal(order.order.isMember, false);
+  assert.equal(database.collections.get("members").size, 0);
+});
+
+test("explicit recharge enrollment creates one member after phone authorization", async () => {
+  const seed = baseSeed();
+  seed.members = [];
+  const { main, database } = loadMembershipApi(seed, "openid-recharge-member");
+  await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code", storeId: "store_aiwa_pizza_main" },
+  });
+  const joined = await main({
+    action: "createMiniProgramMember",
+    payload: { storeId: "store_aiwa_pizza_main", name: "充值会员" },
+  });
+  assert.equal(joined.ok, true);
+  assert.equal(joined.member.phone, "13900000000");
+  assert.equal(database.collections.get("members").size, 1);
+});
+
 test("recharge confirmation is idempotent", async () => {
   const { main, database } = loadMembershipApi(baseSeed());
   const payload = {
@@ -632,9 +679,13 @@ test("duplicate member phones are repaired on member write after the one-time mi
   });
 
   const { main, database } = loadMembershipApi(seed);
+  await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code" },
+  });
   const result = await main({
-    action: "joinMiniProgramMember",
-    payload: { phoneCode: "valid-phone-code", name: "合并后的会员" },
+    action: "createMiniProgramMember",
+    payload: { name: "合并后的会员" },
   });
 
   assert.equal(result.ok, true);
@@ -648,9 +699,13 @@ test("duplicate member phones are repaired on member write after the one-time mi
 
 test("mini-program registration rejects the default placeholder nickname", async () => {
   const { main } = loadMembershipApi(baseSeed());
+  await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code" },
+  });
   const result = await main({
-    action: "joinMiniProgramMember",
-    payload: { phoneCode: "valid-phone-code", name: "微信顾客" },
+    action: "createMiniProgramMember",
+    payload: { name: "微信顾客" },
   });
   assert.equal(result.ok, false);
   assert.match(result.message, /会员昵称/);
@@ -666,9 +721,13 @@ test("phone-authorized mini-program nickname replaces any existing back-office n
     nameSource: "existing_member_record",
   };
   const { main, database } = loadMembershipApi(seed);
+  await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code" },
+  });
   const result = await main({
-    action: "joinMiniProgramMember",
-    payload: { phoneCode: "valid-phone-code", name: "测试" },
+    action: "createMiniProgramMember",
+    payload: { name: "测试" },
   });
   assert.equal(result.ok, true);
   assert.equal(result.member.name, "测试");
@@ -686,9 +745,13 @@ test("concurrent mini-program registrations share one deterministic member docum
     summary: { migrated: true },
   }];
   const { main, database } = loadMembershipApi(seed);
+  await main({
+    action: "authorizeMiniProgramPhone",
+    payload: { phoneCode: "valid-phone-code" },
+  });
   const request = {
-    action: "joinMiniProgramMember",
-    payload: { phoneCode: "valid-phone-code", name: "并发会员" },
+    action: "createMiniProgramMember",
+    payload: { name: "并发会员" },
   };
 
   const [first, second] = await Promise.all([main(request), main(request)]);
@@ -696,5 +759,17 @@ test("concurrent mini-program registrations share one deterministic member docum
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
   assert.equal(first.member.id, second.member.id);
+  assert.equal(database.collections.get("members").size, 1);
+});
+
+test("legacy phone-authorization membership action is rejected", async () => {
+  const { main, database } = loadMembershipApi(baseSeed());
+  const result = await main({
+    action: "joinMiniProgramMember",
+    payload: { phoneCode: "valid-phone-code", name: "旧版会员" },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /先授权手机号.*充值入口/);
   assert.equal(database.collections.get("members").size, 1);
 });

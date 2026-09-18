@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>爱娃披萨店自助点餐系统</title>
-    <link rel="stylesheet" href="styles.css?v=20260824-2">
+    <link rel="stylesheet" href="styles.css?v=20260918-1">
     <script defer src="cloudbase-sdk.js?v=20260804-1"></script>
     <script defer src="cloudbase-config.js?v=20260721-7"></script>
     <script defer src="compatibility.js?v=20260807-2"></script>
-    <script defer src="app-compat.js?v=20260825-5"></script>
+    <script defer src="app-compat.js?v=20260918-1"></script>
   </head>
   <body>
     <section id="loginScreen" class="login-screen">
@@ -74,6 +74,10 @@
             <h2 id="pageTitle">总览</h2>
           </div>
           <div class="topbar-actions">
+            <div id="syncStatus" class="sync-status is-connecting" role="status" aria-live="polite">
+              <span id="syncStatusText">正在连接云端…</span>
+              <button id="refreshData" class="sync-refresh" type="button">立即刷新</button>
+            </div>
             <button id="addMemberTop" class="primary-button" type="button">新增会员</button>
           </div>
         </header>

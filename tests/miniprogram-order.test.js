@@ -157,20 +157,19 @@ test("recharge rejects amounts outside the supported range", async () => {
   assert.equal(cloudCalls.length, 0);
 });
 
-test("joining a member requires a WeChat phone authorization code", async () => {
+test("first phone authorization is separate from joining membership", async () => {
   const { page, toasts, cloudCalls } = loadOrderPage();
-  page.data.memberNameInput = "测试昵称";
-  await page.joinMember({ detail: {} });
-  assert.equal(toasts.at(-1).title, "需要授权手机号才能加入会员");
+  await page.authorizePhone({ detail: {} });
+  assert.equal(toasts.at(-1).title, "需要授权手机号后才能使用小程序");
   assert.equal(cloudCalls.length, 0);
 });
 
-test("home allows browsing before the user chooses to join as a member", () => {
+test("recharge opens explicit membership enrollment for a phone-authorized customer", () => {
   const { page } = loadOrderPage();
-  assert.equal(page.data.authRequired, false);
-
-  page.openMemberJoin();
+  page.data.customer = { phone: "13900000000" };
+  page.openRecharge();
   assert.equal(page.data.authRequired, true);
+  assert.equal(page.data.authMode, "member");
 
   page.closeMemberJoin();
   assert.equal(page.data.authRequired, false);

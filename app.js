@@ -20,6 +20,8 @@ let orderAlertsInitialized = false;
 let lastPendingReminderAt = 0;
 let titleFlashTimer = null;
 let titleFlashStep = 0;
+let lastSuccessfulSyncAt = null;
+let syncFailureCount = 0;
 let orderSoundEnabled = localStorage.getItem(ORDER_SOUND_STORAGE_KEY) !== "false";
 
 const state = {
@@ -175,6 +177,9 @@ const els = {
   currentStoreName: document.querySelector("#currentStoreName"),
   currentStaffName: document.querySelector("#currentStaffName"),
   logoutButton: document.querySelector("#logoutButton"),
+  syncStatus: document.querySelector("#syncStatus"),
+  syncStatusText: document.querySelector("#syncStatusText"),
+  refreshData: document.querySelector("#refreshData"),
   navItems: document.querySelectorAll(".nav-item"),
   pageTitle: document.querySelector("#pageTitle"),
   views: {
@@ -459,11 +464,65 @@ async function syncFromCloud() {
       if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
       saveState({ sync: false });
       state.cloud.message = "CloudBase 数据已同步";
+      markSyncSuccess();
     }
   } catch (error) {
     state.cloud.message = `CloudBase 同步失败：${error?.message || "未知错误"}`;
+    if (handleSessionFailure(error)) return;
+    markSyncFailure(error);
     console.warn("[CloudBase sync]", error);
   }
+}
+
+function isSessionFailure(error) {
+  const message = String(error?.message || "");
+  return /登录状态.*(?:无效|过期)|请重新登录/.test(message);
+}
+
+function handleSessionFailure(error) {
+  if (!isSessionFailure(error)) return false;
+  if (localRefreshTimer) {
+    clearInterval(localRefreshTimer);
+    localRefreshTimer = null;
+  }
+  state.session = null;
+  saveState({ sync: false });
+  showLogin();
+  setLoginHint(error.message || "登录已过期，请重新登录。", "error");
+  return true;
+}
+
+function formatSyncTime(value) {
+  if (!value) return "尚未同步";
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(value);
+}
+
+function renderSyncStatus(mode = "success", message = "") {
+  if (!els.syncStatus || !els.syncStatusText) return;
+  els.syncStatus.classList.toggle("is-error", mode === "error");
+  els.syncStatus.classList.toggle("is-connecting", mode === "connecting");
+  els.syncStatusText.textContent = message || `云端已同步 · ${formatSyncTime(lastSuccessfulSyncAt)}`;
+  if (els.refreshData) els.refreshData.disabled = mode === "connecting";
+}
+
+function markSyncSuccess() {
+  lastSuccessfulSyncAt = new Date();
+  syncFailureCount = 0;
+  renderSyncStatus("success");
+}
+
+function markSyncFailure(error) {
+  syncFailureCount += 1;
+  const reason = error?.message || "网络异常";
+  renderSyncStatus(
+    "error",
+    `同步失败（${syncFailureCount} 次）· 上次成功 ${formatSyncTime(lastSuccessfulSyncAt)} · ${reason}`
+  );
 }
 
 function scheduleCloudSave() {
@@ -1354,36 +1413,43 @@ function processOrderAlerts() {
 
 function startLocalRefresh() {
   if ((!state.localApi.ready && !state.cloud.ready) || localRefreshTimer) return;
-  localRefreshTimer = setInterval(async () => {
-    if (!["orders", "dashboard", "members", "records", "products", "settings"].includes(state.activeView)) return;
-    if (remoteRefreshInFlight || cloudSaveTimer || cloudSaveInFlight || state.cloud.booting) return;
-    remoteRefreshInFlight = true;
-    const refreshRevision = localDataRevision;
-    try {
-      const result = state.localApi.ready
-        ? await callLocalApi("GET")
-        : await callCloud("getStoreData");
-      // Never apply a remote snapshot fetched before a newer local save.
-      if (result.data && refreshRevision === localDataRevision && !cloudSaveTimer && !cloudSaveInFlight) {
-        const deliveryDraft = deliverySettingsDirty ? state.settings.delivery : null;
-        const currentSession = state.session;
-        const currentStaff = getCurrentStaff();
-        const currentStore = getCurrentStore();
-        applyData(result.data, { keepSession: true });
-        if (deliveryDraft) state.settings.delivery = deliveryDraft;
-        state.session = currentSession;
-        if (currentStore && !state.stores.some((store) => store.id === currentStore.id)) state.stores.push(currentStore);
-        if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
-        saveState({ sync: false });
-        render();
-        processOrderAlerts();
-      }
-    } catch (error) {
-      console.warn("[Remote refresh]", error);
-    } finally {
-      remoteRefreshInFlight = false;
+  localRefreshTimer = setInterval(() => refreshRemoteData(), 1500);
+}
+
+async function refreshRemoteData(options = {}) {
+  if (!options.manual && !["orders", "dashboard", "members", "records", "products", "settings"].includes(state.activeView)) return;
+  if (remoteRefreshInFlight || cloudSaveTimer || cloudSaveInFlight || state.cloud.booting || !state.session?.token) return;
+  remoteRefreshInFlight = true;
+  if (options.manual) renderSyncStatus("connecting", "正在刷新云端数据…");
+  const refreshRevision = localDataRevision;
+  try {
+    const result = state.localApi.ready
+      ? await callLocalApi("GET")
+      : await callCloud("getStoreData");
+    // Never apply a remote snapshot fetched before a newer local save.
+    if (result.data && refreshRevision === localDataRevision && !cloudSaveTimer && !cloudSaveInFlight) {
+      const deliveryDraft = deliverySettingsDirty ? state.settings.delivery : null;
+      const currentSession = state.session;
+      const currentStaff = getCurrentStaff();
+      const currentStore = getCurrentStore();
+      applyData(result.data, { keepSession: true });
+      if (deliveryDraft) state.settings.delivery = deliveryDraft;
+      state.session = currentSession;
+      if (currentStore && !state.stores.some((store) => store.id === currentStore.id)) state.stores.push(currentStore);
+      if (currentStaff && !state.staff.some((staffer) => staffer.id === currentStaff.id)) state.staff.push(currentStaff);
+      saveState({ sync: false });
+      markSyncSuccess();
+      render();
+      processOrderAlerts();
     }
-  }, 1500);
+  } catch (error) {
+    if (!handleSessionFailure(error)) {
+      markSyncFailure(error);
+      console.warn("[Remote refresh]", error);
+    }
+  } finally {
+    remoteRefreshInFlight = false;
+  }
 }
 
 function renderSession() {
@@ -2852,6 +2918,7 @@ els.logoutButton.addEventListener("click", () => {
   saveState();
   showLogin();
 });
+els.refreshData?.addEventListener("click", () => refreshRemoteData({ manual: true }));
 
 document.querySelectorAll("[data-view-jump]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.viewJump));

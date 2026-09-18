@@ -266,6 +266,48 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 7px 10px 7px 12px;
+  border: 1px solid #b9d9ca;
+  border-radius: 8px;
+  color: #17633f;
+  background: #eef9f3;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sync-status.is-error {
+  border-color: #e4a4a4;
+  color: #8d2424;
+  background: #fff1f1;
+}
+
+.sync-status.is-connecting {
+  border-color: #e7cf92;
+  color: #765714;
+  background: #fff8e5;
+}
+
+.sync-refresh {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sync-refresh:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .ghost-link {
   display: inline-grid;
   min-height: 42px;
