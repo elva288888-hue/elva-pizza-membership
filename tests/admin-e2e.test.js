@@ -123,7 +123,7 @@ test("admin and customer pages share product data through isolated local API", a
   assert.equal(await customer.getByText("自动化同步后的披萨").count(), 1);
 });
 
-test("dialogs can cancel empty forms, member phones are unique, and orders refresh automatically", async (t) => {
+test("dialogs can cancel empty forms, admin cannot add members, and orders refresh automatically", async (t) => {
   if (!fs.existsSync(chromePath)) {
     t.skip("Google Chrome is not installed");
     return;
@@ -155,19 +155,7 @@ test("dialogs can cancel empty forms, member phones are unique, and orders refre
   assert.equal(await page.locator("#productDialog").evaluate((dialog) => dialog.open), false);
 
   await page.getByRole("button", { name: "会员", exact: true }).click();
-  for (const name of ["首位会员", "重复会员"]) {
-    await page.getByRole("button", { name: "新增会员" }).first().click();
-    await page.locator("#memberName").fill(name);
-    await page.locator("#memberPhone").fill("13800138000");
-    const alertPromise = name === "重复会员"
-      ? page.waitForEvent("dialog").then((dialog) => dialog.accept())
-      : null;
-    await page.getByRole("button", { name: "保存会员" }).click();
-    if (alertPromise) await alertPromise;
-  }
-  assert.equal(await page.getByText("首位会员", { exact: true }).count(), 1);
-  assert.equal(await page.getByText("重复会员", { exact: true }).count(), 0);
-  await page.locator("#memberDialog [data-dialog-close]").last().click();
+  assert.equal(await page.getByRole("button", { name: "新增会员" }).count(), 0);
 
   await page.getByRole("button", { name: "订单", exact: true }).click();
   const order = {
@@ -192,6 +180,9 @@ test("dialogs can cancel empty forms, member phones are unique, and orders refre
   });
   assert.equal(response.ok, true);
   await page.locator("#orderList").getByText("AW-LIVE-1", { exact: true }).waitFor({ timeout: 5000 });
+  assert.equal(await page.locator("#orderList").getByRole("button", { name: "退款/退货" }).count(), 1);
+  await page.locator("#orderList").getByRole("button", { name: "接单制作" }).click();
+  assert.equal(await page.locator("#orderList").getByRole("button", { name: "退款/退货" }).count(), 0);
   await page.locator("#orderList").getByRole("button", { name: "打印小票" }).click();
   assert.equal(await page.locator("#receiptPreviewDialog").evaluate((dialog) => dialog.open), true);
   assert.equal(await page.locator("#receiptPreviewBody").getByText("订单小票", { exact: true }).count(), 1);

@@ -10,6 +10,7 @@
     "build:production": "node scripts/build-static-site.js production && node scripts/verify-static-site.js production",
     "build:miniprogram:test": "node scripts/build-miniprogram.js test && node scripts/verify-miniprogram.js test",
     "build:miniprogram:production": "node scripts/build-miniprogram.js production && node scripts/verify-miniprogram.js production",
+    "backup:production": "node scripts/backup-production-data.js",
     "deploy:functions:production": "tcb --config-file cloudbaserc.production.json -e elva-pizza-prod-d3f8fae10cb05aca fn deploy --all --force"
   }
 }

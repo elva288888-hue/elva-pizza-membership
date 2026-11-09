@@ -41,6 +41,9 @@ fs.writeFileSync(appPath, renderedApp);
 const projectConfig = JSON.parse(
   fs.readFileSync(path.join(root, "project.config.json"), "utf8")
 );
+// Give each generated environment a distinct DevTools project identity so the
+// IDE never reuses the source/test project when asked to upload production.
+projectConfig.projectname = `${projectConfig.projectname}-${target}`;
 projectConfig.miniprogramRoot = "miniprogram/";
 projectConfig.cloudfunctionRoot = path.relative(outputRoot, path.join(root, "cloudfunctions")) + "/";
 fs.writeFileSync(

@@ -164,6 +164,20 @@ test("first phone authorization is separate from joining membership", async () =
   assert.equal(cloudCalls.length, 0);
 });
 
+test("first visit can browse products without phone authorization", async () => {
+  const { page } = loadOrderPage();
+  await page.onLoad();
+  assert.equal(page.data.authRequired, false);
+  assert.equal(page.hasLoaded, true);
+});
+
+test("phone authorization dialog can be dismissed to continue browsing", () => {
+  const { page } = loadOrderPage();
+  page.setData({ authRequired: true, authMode: "phone" });
+  page.closeMemberJoin();
+  assert.equal(page.data.authRequired, false);
+});
+
 test("recharge opens explicit membership enrollment for a phone-authorized customer", () => {
   const { page } = loadOrderPage();
   page.data.customer = { phone: "13900000000" };

@@ -1,14 +1,14 @@
 <view class="page">
   <view wx:if="{{authRequired}}" class="auth-mask" bindtap="closeMemberJoin">
     <view class="auth-card" catchtap="noop">
-      <button wx:if="{{authMode === 'member'}}" class="auth-close" bindtap="closeMemberJoin" disabled="{{authSubmitting}}">×</button>
+      <button class="auth-close" bindtap="closeMemberJoin" disabled="{{authSubmitting}}">×</button>
       <image class="auth-logo" src="/assets/aiwa-pizza-logo.jpg" mode="aspectFill"></image>
       <text class="auth-title">{{authMode === 'phone' ? '验证手机号' : '充值并加入会员'}}</text>
-      <text class="auth-copy">{{authMode === 'phone' ? '首次使用需要授权手机号，用于订单联系和查询；授权不会自动加入会员。' : '填写会员昵称后创建会员账号，随后即可选择充值金额。'}}</text>
+      <text class="auth-copy">{{authMode === 'phone' ? '完成点单或充值前需要授权手机号，用于订单联系和查询；授权不会自动加入会员。' : '填写会员昵称后创建会员账号，随后即可选择充值金额。'}}</text>
       <input wx:if="{{authMode === 'member'}}" class="field auth-name-input" maxlength="20" value="{{memberNameInput}}" placeholder="请输入会员昵称" bindinput="setMemberName"></input>
-      <button wx:if="{{authMode === 'phone'}}" class="auth-button" open-type="getPhoneNumber" bindgetphonenumber="authorizePhone" loading="{{authSubmitting}}" disabled="{{authSubmitting}}">授权手机号并进入</button>
+      <button wx:if="{{authMode === 'phone'}}" class="auth-button" open-type="getPhoneNumber" bindgetphonenumber="authorizePhone" loading="{{authSubmitting}}" disabled="{{authSubmitting}}">授权手机号并继续</button>
       <button wx:else class="auth-button" bindtap="joinMember" loading="{{authSubmitting}}" disabled="{{!memberNameInput || authSubmitting}}">确认加入并充值</button>
-      <button wx:if="{{authMode === 'member'}}" class="auth-cancel" bindtap="closeMemberJoin" disabled="{{authSubmitting}}">暂不充值</button>
+      <button class="auth-cancel" bindtap="closeMemberJoin" disabled="{{authSubmitting}}">{{authMode === 'phone' ? '暂不授权，继续浏览' : '暂不充值'}}</button>
       <text class="auth-note">手机号仅用于本店点餐与订单服务</text>
     </view>
   </view>

@@ -28,8 +28,12 @@ const sharedFiles = [
   "customer.html",
   "customer.js",
   "index.html",
+  "manifest.webmanifest",
+  "service-worker.js",
   "styles.css",
   path.join("assets", "aiwa-pizza-logo.jpg"),
+  path.join("assets", "app-icon-192.png"),
+  path.join("assets", "app-icon-512.png"),
   path.join("downloads", "aiwa-pos58-print-service-win7.zip"),
 ];
 const testOnlyFiles = ["alipay-mock.html", "mobile-test.html"];

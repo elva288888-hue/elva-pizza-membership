@@ -51,6 +51,7 @@ exports.main = async (event = {}) => {
     if (action === "recordPaidMiniProgramOrder") return await recordPaidMiniProgramOrder(payload);
     if (action === "confirmPaidMiniProgramRecharge") return await confirmPaidMiniProgramRecharge(payload);
     if (action === "refundOrder") return await refundOrder(payload);
+    if (action === "refundMiniProgramOrder") return await refundMiniProgramOrder(payload);
     if (action === "migrateSingleStoreData") return await migrateSingleStoreData(payload);
     if (action === "initializeProduction") return await initializeProduction(payload);
 
@@ -64,9 +65,30 @@ exports.main = async (event = {}) => {
 async function refundOrder(payload = {}) {
   const adminSession = await requireAdminSession(payload.sessionToken);
   if (!adminSession.ok) return adminSession;
-  const order = await getDoc(COLLECTIONS.orders, String(payload.orderId || "").trim());
+  return await processOrderRefund(payload, adminSession.staffer?.id || null);
+}
+
+async function refundMiniProgramOrder(payload = {}) {
+  const orderId = String(payload.orderId || "").trim();
+  const order = await getDoc(COLLECTIONS.orders, orderId);
+  if (!order) return fail("未找到需要退款的订单。");
+  const openid = getOpenid(payload);
+  if (!openid || openid !== String(order.customerOpenid || "")) {
+    return fail("只能退款当前微信账号提交的订单。");
+  }
+  const remaining = Number((Number(order.totalAmount || 0) - Number(order.refundAmount || 0)).toFixed(2));
+  return await processOrderRefund({
+    ...payload,
+    amount: remaining,
+    reason: String(payload.reason || "顾客在小程序申请退款").trim(),
+  }, null, order);
+}
+
+async function processOrderRefund(payload = {}, staffId = null, loadedOrder = null) {
+  const order = loadedOrder || await getDoc(COLLECTIONS.orders, String(payload.orderId || "").trim());
   if (!order) return fail("未找到需要退款的订单。");
   if (order.paymentStatus !== "paid") return fail("只有已支付订单可以退款。");
+  if (order.status !== "pending") return fail("订单接单后不可退款。");
   const amount = Number(payload.amount);
   const remaining = Number((Number(order.totalAmount || 0) - Number(order.refundAmount || 0)).toFixed(2));
   if (!Number.isFinite(amount) || amount <= 0 || amount > remaining) return fail(`退款金额不能超过 ${remaining.toFixed(2)} 元。`);
@@ -114,7 +136,7 @@ async function refundOrder(payload = {}) {
       memberPhone: member.phone,
       memberCard: member.card,
       storeId: order.storeId,
-      staffId: adminSession.staffer?.id || null,
+      staffId,
       type: "refund",
       amount,
       bonusAmount: 0,
@@ -138,7 +160,7 @@ async function refundOrder(payload = {}) {
     status: paymentRefund?.status === "SUCCESS" ? "completed" : (paymentRefund ? "processing" : "completed"),
     paymentRefundId: paymentRefund?.refundId || "",
     outRefundNo: paymentRefund?.outRefundNo || "",
-    staffId: adminSession.staffer?.id || null,
+    staffId,
     createdAt: now,
   };
   await upsert(COLLECTIONS.refunds, refund.id, refund);
@@ -212,7 +234,14 @@ async function saveStoreData(payload = {}) {
   } else {
     warnings.push("店员无权修改店员管理数据，相关更改已忽略");
   }
-  await safeMergeCollection(COLLECTIONS.members, data.members || [], warnings);
+  const existingMembers = await safeGetAll(COLLECTIONS.members);
+  const existingMemberMap = new Map(existingMembers.map((member) => [member.id, member]));
+  const submittedMembers = data.members || [];
+  if (submittedMembers.some((member) => !existingMemberMap.has(member.id))) {
+    warnings.push("后台不允许新增会员；新会员须由顾客在小程序充值时创建");
+  }
+  // Membership identity, profile and balance are customer-owned and may only
+  // be changed by the mini-program membership/payment flows.
   await safeMergeCollection(COLLECTIONS.transactions, data.records || [], warnings);
   await safeReplaceCollection(COLLECTIONS.categories, data.categories || [], warnings);
   // Products may be edited from more than one browser. Never replace the whole

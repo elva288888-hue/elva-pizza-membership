@@ -23,6 +23,7 @@ let titleFlashStep = 0;
 let lastSuccessfulSyncAt = null;
 let syncFailureCount = 0;
 let orderSoundEnabled = localStorage.getItem(ORDER_SOUND_STORAGE_KEY) !== "false";
+let deferredInstallPrompt = null;
 
 const state = {
   localApi: {
@@ -243,6 +244,7 @@ const els = {
   staffList: document.querySelector("#staffList"),
   addMember: document.querySelector("#addMember"),
   addMemberTop: document.querySelector("#addMemberTop"),
+  installApp: document.querySelector("#installApp"),
   memberDialog: document.querySelector("#memberDialog"),
   memberDialogTitle: document.querySelector("#memberDialogTitle"),
   memberForm: document.querySelector("#memberForm"),
@@ -1346,13 +1348,22 @@ function playOrderTone() {
     oscillator.type = "sine";
     oscillator.frequency.setValueAtTime(frequency, toneStart);
     gain.gain.setValueAtTime(0.0001, toneStart);
-    gain.gain.exponentialRampToValueAtTime(0.22, toneStart + 0.02);
+    // 店内收银设备扬声器普遍偏小，按原提示音振幅的 5 倍输出。
+    gain.gain.exponentialRampToValueAtTime(3.6, toneStart + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.14);
     oscillator.connect(gain);
     gain.connect(orderAudioContext.destination);
     oscillator.start(toneStart);
     oscillator.stop(toneStart + 0.16);
   });
+  if ("speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined") {
+    window.speechSynthesis.cancel();
+    const message = new SpeechSynthesisUtterance("您有新的订单");
+    message.lang = "zh-CN";
+    message.volume = 1;
+    message.rate = 0.92;
+    window.speechSynthesis.speak(message);
+  }
   return true;
 }
 
@@ -1530,6 +1541,7 @@ function renderDashboard() {
 }
 
 function renderQuickMembers() {
+  if (!els.quickMember) return;
   const storeMembers = getStoreMembers();
   if (!storeMembers.length) {
     els.quickMember.innerHTML = '<option value="">请先新增会员</option>';
@@ -1574,9 +1586,6 @@ function renderMembers() {
           </header>
           <p>${escapeHtml(member.note || "暂无备注")}</p>
           <div class="card-actions">
-            <button class="mini-button" data-action="recharge" data-id="${member.id}" type="button">充值</button>
-            <button class="mini-button" data-action="spend" data-id="${member.id}" type="button">消费</button>
-            <button class="mini-button" data-action="edit" data-id="${member.id}" type="button">编辑</button>
             <button class="mini-button" data-action="print-member" data-id="${member.id}" type="button">打印记录</button>
           </div>
         </article>
@@ -1661,12 +1670,14 @@ function orderTemplate(order) {
     ? `${member.name} · ${member.card} · ${member.phone}`
     : `${order.customerName} · ${order.customerPhone || order.customerOpenid || "微信顾客"}`;
   const netAmount = order.totalAmount - (order.refundAmount || 0);
-  const canRefund = order.paymentStatus === "paid" && !["cancelled", "refunded"].includes(order.status) && netAmount > 0;
+  const canRefund = order.paymentStatus === "paid" && order.status === "pending" && netAmount > 0;
   const nextActions = {
-    pending: [["making", "接单制作"], ["cancelled", "取消订单"]],
+    pending: order.paymentStatus === "paid"
+      ? [["making", "接单制作"]]
+      : [["making", "接单制作"], ["cancelled", "取消订单"]],
     making: order.fulfillmentType === "delivery"
-      ? [["delivering", "开始配送"], ["cancelled", "取消订单"]]
-      : [["ready", "标记待取"], ["cancelled", "取消订单"]],
+      ? [["delivering", "开始配送"]]
+      : [["ready", "标记待取"]],
     ready: [["completed", "完成取餐"]],
     delivering: [["completed", "确认送达"]],
   }[order.status] || [];
@@ -2303,6 +2314,10 @@ function updateOrderStatus(orderId, status) {
 function openRefundDialog(orderId) {
   const order = getOrder(orderId);
   if (!order) return;
+  if (order.status !== "pending") {
+    alert("订单接单后不可退款");
+    return;
+  }
   const remaining = Math.max(0, order.totalAmount - (order.refundAmount || 0));
   els.refundOrderId.value = order.id;
   els.refundAmount.value = remaining.toFixed(2);
@@ -2924,8 +2939,6 @@ document.querySelectorAll("[data-view-jump]").forEach((button) => {
   button.addEventListener("click", () => switchView(button.dataset.viewJump));
 });
 
-els.addMember.addEventListener("click", () => openMemberDialog());
-els.addMemberTop.addEventListener("click", () => openMemberDialog());
 els.saveMember.addEventListener("click", saveMemberFromForm);
 els.addProduct.addEventListener("click", () => openProductDialog());
 els.saveProduct.addEventListener("click", saveProductFromForm);
@@ -2991,23 +3004,6 @@ els.importData.addEventListener("change", (event) => {
   const file = event.target.files?.[0];
   if (file) importData(file);
   event.target.value = "";
-});
-
-els.quickTransactionForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const record = addTransaction(
-    els.quickMember.value,
-    els.quickType.value,
-    els.quickAmount.value,
-    els.quickNote.value.trim()
-  );
-  if (record) {
-    els.quickAmount.value = "";
-    els.quickNote.value = "";
-    if (event.submitter?.value === "print") {
-      openMemberPrintDialog(record.memberId);
-    }
-  }
 });
 
 els.bonusRuleForm.addEventListener("submit", (event) => {
@@ -3239,21 +3235,9 @@ els.memberList.addEventListener("click", (event) => {
   const member = getMember(button.dataset.id);
   if (!member) return;
 
-  if (button.dataset.action === "edit") {
-    openMemberDialog(member);
-    return;
-  }
-
   if (button.dataset.action === "print-member") {
     openMemberPrintDialog(member.id);
-    return;
   }
-
-  const label = button.dataset.action === "recharge" ? "充值" : "消费";
-  const amount = prompt(`请输入${member.name}本次${label}金额`);
-  if (amount === null) return;
-  const note = prompt("备注，可留空") || "";
-  addTransaction(member.id, button.dataset.action, amount, note);
 });
 
 initCloudBase().finally(async () => {
@@ -3266,3 +3250,39 @@ initCloudBase().finally(async () => {
   initializeOrderAlerts();
   startLocalRefresh();
 });
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  if (els.installApp) els.installApp.hidden = false;
+});
+
+els.installApp?.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) {
+    const shortcut = `[InternetShortcut]\r\nURL=${location.origin}${location.pathname}\r\n`;
+    const blob = new Blob([shortcut], { type: "application/internet-shortcut;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "爱娃披萨后台.url";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    alert("桌面快捷方式已下载。请把下载的“爱娃披萨后台.url”文件拖到电脑桌面，以后双击即可打开后台。");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  els.installApp.hidden = true;
+});
+
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  if (els.installApp) els.installApp.textContent = "已安装到电脑";
+});
+
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js"));
+}

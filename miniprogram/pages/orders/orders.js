@@ -30,7 +30,10 @@ Page({
           ...order,
           totalText: Number(order.totalAmount || 0).toFixed(2),
           itemsText: (order.items || []).map((item) => `${item.name}×${item.quantity}`).join("，"),
-          statusText: statusText(order.status)
+          statusText: statusText(order.status),
+          canRefund: order.paymentStatus === "paid"
+            && order.status === "pending"
+            && Number(order.totalAmount || 0) > Number(order.refundAmount || 0)
         }));
       this.setData({ orders });
     } catch (error) {
@@ -39,6 +42,41 @@ Page({
     } finally {
       wx.hideLoading();
     }
+  },
+
+  requestRefund(event) {
+    const orderId = event.currentTarget.dataset.id;
+    const order = this.data.orders.find((item) => item.id === orderId);
+    if (!order || !order.canRefund) {
+      wx.showToast({ title: "订单接单后不可退款", icon: "none" });
+      return;
+    }
+    wx.showModal({
+      title: "确认退款",
+      content: `确认取消订单 ${order.orderNo} 并原路退回 ¥${order.totalText} 吗？`,
+      confirmText: "确认退款",
+      confirmColor: "#c53b35",
+      success: async (result) => {
+        if (!result.confirm) return;
+        wx.showLoading({ title: "退款中" });
+        try {
+          const response = await wx.cloud.callFunction({
+            name: app.globalData.membershipFunction,
+            data: {
+              action: "refundMiniProgramOrder",
+              payload: { orderId }
+            }
+          });
+          if (!response.result?.ok) throw new Error(response.result?.message || "退款失败");
+          wx.showToast({ title: "退款申请成功", icon: "success" });
+          await this.loadOrders();
+        } catch (error) {
+          wx.showToast({ title: error.message || "退款失败", icon: "none" });
+        } finally {
+          wx.hideLoading();
+        }
+      }
+    });
   }
 });
 

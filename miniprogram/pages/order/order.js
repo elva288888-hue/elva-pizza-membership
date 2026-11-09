@@ -62,9 +62,6 @@ Page({
   async onLoad() {
     await this.authorizeCustomer();
     await this.loadStoreData();
-    if (!this.data.customer?.phone) {
-      this.setData({ authRequired: true, authMode: "phone" });
-    }
     this.hasLoaded = true;
   },
 
@@ -338,7 +335,7 @@ Page({
   },
 
   closeMemberJoin() {
-    if (!this.data.authSubmitting && this.data.authMode !== "phone") this.setData({ authRequired: false });
+    if (!this.data.authSubmitting) this.setData({ authRequired: false });
   },
 
   openRecharge() {

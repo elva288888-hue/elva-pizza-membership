@@ -7,6 +7,7 @@ public-site/
 gcm-diagnose.log
 __pycache__/
 outputs/
+reports/
 work/
 review-materials/
 github-upload/

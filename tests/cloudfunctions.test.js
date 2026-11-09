@@ -307,7 +307,7 @@ test("wechat paid order refund uses the original payment channel without crediti
     refundAmount: 0,
     paymentStatus: "paid",
     paymentMethod: "wechat_pay",
-    status: "paid",
+    status: "pending",
   });
   const calls = [];
   const { main, database } = loadMembershipApi(seed, "openid-test", async (request) => {
@@ -359,7 +359,7 @@ test("wechat refund failure leaves order and member balance unchanged", async ()
     refundAmount: 0,
     paymentStatus: "paid",
     paymentMethod: "wechat_pay",
-    status: "paid",
+    status: "pending",
   });
   const { main, database } = loadMembershipApi(seed, "openid-test", async () => ({
     result: { ok: false, message: "微信支付拒绝退款" },
@@ -374,6 +374,76 @@ test("wechat refund failure leaves order and member balance unchanged", async ()
   assert.equal(database.collections.get("members").get("member-1").balance, 100);
   assert.equal(database.collections.get("refunds").size, 0);
   assert.equal(database.collections.get("orders").get("order-wechat-failed").refundAmount, 0);
+});
+
+test("accepted orders cannot be refunded", async () => {
+  const seed = baseSeed();
+  const sessionToken = "e".repeat(64);
+  seed.admin_sessions = [{
+    _id: sessionToken,
+    id: sessionToken,
+    staffId: "staff_aiwa_manager",
+    storeId: "store_aiwa_pizza_main",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  }];
+  seed.orders.push({
+    _id: "order-accepted-1",
+    id: "order-accepted-1",
+    orderNo: "OD202610070001",
+    storeId: "store_aiwa_pizza_main",
+    memberId: "member-1",
+    totalAmount: 39,
+    refundAmount: 0,
+    paymentStatus: "paid",
+    paymentMethod: "member_balance",
+    status: "making",
+  });
+  const { main, database } = loadMembershipApi(seed);
+  const result = await main({
+    action: "refundOrder",
+    payload: { sessionToken, orderId: "order-accepted-1", amount: 39, reason: "接单后退款" },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /接单后不可退款/);
+  assert.equal(database.collections.get("refunds").size, 0);
+  assert.equal(database.collections.get("members").get("member-1").balance, 100);
+});
+
+test("admin data sync cannot create a member", async () => {
+  const seed = baseSeed();
+  const sessionToken = "f".repeat(64);
+  seed.admin_sessions = [{
+    _id: sessionToken,
+    id: sessionToken,
+    staffId: "staff_aiwa_manager",
+    storeId: "store_aiwa_pizza_main",
+    expiresAt: Date.now() + 60 * 60 * 1000,
+  }];
+  const { main, database } = loadMembershipApi(seed);
+  const result = await main({
+    action: "saveStoreData",
+    payload: {
+      sessionToken,
+      data: {
+        members: [{ ...seed.members[0], name: "后台篡改姓名", balance: 9999 }, {
+          id: "member-created-from-admin",
+          storeId: "store_aiwa_pizza_main",
+          name: "后台新增会员",
+          phone: "13800138000",
+          card: "AW9999",
+          balance: 0,
+        }],
+        settings: { bonusRules: seed.bonusrules },
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.warnings.join("；"), /后台不允许新增会员/);
+  assert.equal(database.collections.get("members").has("member-created-from-admin"), false);
+  assert.equal(database.collections.get("members").get("member-1").name, "自动化会员");
+  assert.equal(database.collections.get("members").get("member-1").balance, 100);
 });
 
 test("staff can modify delivery settings but not bonus rules or staff management data", async () => {
@@ -772,4 +842,75 @@ test("legacy phone-authorization membership action is rejected", async () => {
   assert.equal(result.ok, false);
   assert.match(result.message, /先授权手机号.*充值入口/);
   assert.equal(database.collections.get("members").size, 1);
+});
+
+test("customer can fully refund their own paid order before it is accepted", async () => {
+  const seed = baseSeed();
+  seed.orders.push({
+    _id: "order-customer-pending",
+    id: "order-customer-pending",
+    orderNo: "OD202610070002",
+    storeId: "store_aiwa_pizza_main",
+    customerOpenid: "openid-test",
+    memberId: "member-1",
+    totalAmount: 39,
+    refundAmount: 0,
+    paymentStatus: "paid",
+    paymentMethod: "member_balance",
+    status: "pending",
+  });
+  const { main, database } = loadMembershipApi(seed, "openid-test");
+  const result = await main({
+    action: "refundMiniProgramOrder",
+    payload: { orderId: "order-customer-pending" },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(database.collections.get("orders").get("order-customer-pending").status, "refunded");
+  assert.equal(database.collections.get("members").get("member-1").balance, 139);
+});
+
+test("customer cannot refund another customer's order or an accepted order", async () => {
+  const seed = baseSeed();
+  seed.orders.push({
+    _id: "order-other-customer",
+    id: "order-other-customer",
+    orderNo: "OD202610070003",
+    storeId: "store_aiwa_pizza_main",
+    customerOpenid: "openid-owner",
+    memberId: "member-1",
+    totalAmount: 39,
+    refundAmount: 0,
+    paymentStatus: "paid",
+    paymentMethod: "member_balance",
+    status: "pending",
+  }, {
+    _id: "order-customer-accepted",
+    id: "order-customer-accepted",
+    orderNo: "OD202610070004",
+    storeId: "store_aiwa_pizza_main",
+    customerOpenid: "openid-test",
+    memberId: "member-1",
+    totalAmount: 39,
+    refundAmount: 0,
+    paymentStatus: "paid",
+    paymentMethod: "member_balance",
+    status: "making",
+  });
+  const { main, database } = loadMembershipApi(seed, "openid-test");
+
+  const otherCustomer = await main({
+    action: "refundMiniProgramOrder",
+    payload: { orderId: "order-other-customer" },
+  });
+  const accepted = await main({
+    action: "refundMiniProgramOrder",
+    payload: { orderId: "order-customer-accepted" },
+  });
+
+  assert.equal(otherCustomer.ok, false);
+  assert.match(otherCustomer.message, /当前微信账号/);
+  assert.equal(accepted.ok, false);
+  assert.match(accepted.message, /接单后不可退款/);
+  assert.equal(database.collections.get("refunds").size, 0);
 });
