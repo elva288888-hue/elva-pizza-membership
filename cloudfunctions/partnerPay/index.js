@@ -8,6 +8,7 @@ const WXPAY_HOST = "api.mch.weixin.qq.com";
 const RECONCILE_LIMIT = 20;
 const RECONCILE_MIN_AGE_MS = 20 * 1000;
 const RECONCILE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+const PAYMENT_EXPIRY_MS = 15 * 60 * 1000;
 let platformCertificatesCache = { expiresAt: 0, certificates: new Map() };
 
 exports.main = async (event = {}) => {
@@ -207,19 +208,34 @@ async function reconcilePendingOrders({ source = "timer" } = {}) {
   const candidates = (result.data || [])
     .filter((order) => shouldReconcileOrder(order, now))
     .slice(0, RECONCILE_LIMIT);
-  const summary = { source, checked: 0, paid: 0, unpaid: 0, failed: 0, orders: [] };
+  const summary = { source, checked: 0, paid: 0, unpaid: 0, closed: 0, failed: 0, orders: [] };
 
   for (const order of candidates) {
     summary.checked += 1;
     try {
-      const confirmed = await confirmJsapiOrder({ out_trade_no: order.orderNo });
-      if (confirmed.ok) {
+      const payment = await queryJsapiOrder(order.orderNo);
+      if (payment.trade_state === "SUCCESS") {
+        const confirmed = await confirmJsapiOrder({ out_trade_no: order.orderNo });
+        if (!confirmed.ok) throw new Error(confirmed.message || "订单入账失败");
         summary.paid += 1;
         summary.orders.push({ orderNo: order.orderNo, state: "SUCCESS" });
+      } else if (payment.trade_state === "CLOSED") {
+        await markExpiredOrderCancelled(db, order, "微信支付订单已关闭");
+        summary.closed += 1;
+        summary.orders.push({ orderNo: order.orderNo, state: "CLOSED" });
+      } else if (payment.trade_state === "NOTPAY" && isPaymentExpired(order, now)) {
+        const closeResult = await closeExpiredOrder(db, order);
+        if (closeResult === "SUCCESS") {
+          summary.paid += 1;
+        } else {
+          summary.closed += 1;
+        }
+        summary.orders.push({ orderNo: order.orderNo, state: closeResult });
       } else {
         summary.unpaid += 1;
-        summary.orders.push({ orderNo: order.orderNo, state: "NOTPAY" });
-        await recordPaymentCheck(db, order, confirmed.message || "NOTPAY");
+        const state = payment.trade_state || "UNKNOWN";
+        summary.orders.push({ orderNo: order.orderNo, state });
+        await recordPaymentCheck(db, order, payment.trade_state_desc || state);
       }
     } catch (error) {
       summary.failed += 1;
@@ -230,6 +246,56 @@ async function reconcilePendingOrders({ source = "timer" } = {}) {
   }
 
   return ok(summary);
+}
+
+async function closeExpiredOrder(db, order) {
+  const config = readConfig();
+  try {
+    await wxpayRequest({
+      method: "POST",
+      path: `/v3/pay/transactions/out-trade-no/${encodeURIComponent(order.orderNo)}/close`,
+      body: { mchid: config.mchid },
+      config,
+    });
+    await markExpiredOrderCancelled(db, order, "待支付超过15分钟，系统自动关闭");
+    return "CLOSED";
+  } catch (error) {
+    // Payment may have completed between the preceding query and the close
+    // request. Query again before changing any local order state.
+    const latest = await queryJsapiOrder(order.orderNo, config);
+    if (latest.trade_state === "SUCCESS") {
+      const confirmed = await confirmJsapiOrder({ out_trade_no: order.orderNo });
+      if (!confirmed.ok) throw new Error(confirmed.message || "订单入账失败");
+      return "SUCCESS";
+    }
+    if (latest.trade_state === "CLOSED") {
+      await markExpiredOrderCancelled(db, order, "待支付超过15分钟，微信支付订单已关闭");
+      return "CLOSED";
+    }
+    throw error;
+  }
+}
+
+async function markExpiredOrderCancelled(db, order, reason) {
+  const now = new Date().toISOString();
+  await db.collection("orders").doc(order._id || order.id).update({
+    data: {
+      status: "cancelled",
+      paymentStatus: "unpaid",
+      cancelledAt: now,
+      paymentClosedAt: now,
+      cancellationReason: reason,
+      paymentLastCheckedAt: now,
+      paymentCheckCount: Number(order.paymentCheckCount || 0) + 1,
+      paymentLastCheckResult: "CLOSED",
+      updatedAt: now,
+    },
+  });
+}
+
+function isPaymentExpired(order, now = Date.now()) {
+  const createdAt = Date.parse(order?.createdAt || "");
+  return Number.isFinite(createdAt) && now - createdAt >= PAYMENT_EXPIRY_MS;
 }
 
 async function queryJsapiOrder(outTradeNo, config = readConfig()) {
