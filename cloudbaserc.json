@@ -11,6 +11,11 @@
       "name": "partnerPay",
       "timeout": 10,
       "runtime": "Nodejs16.13"
+    },
+    {
+      "name": "wxpayNotify",
+      "timeout": 10,
+      "runtime": "Nodejs16.13"
     }
   ]
 }
