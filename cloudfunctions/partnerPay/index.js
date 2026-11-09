@@ -405,7 +405,9 @@ function shouldReconcileOrder(order, now = Date.now()) {
 }
 
 function reconcileIntervalMs(age) {
-  if (age < 10 * 60 * 1000) return 60 * 1000;
+  // Keep checking once per minute through the expiry boundary so stale
+  // transactions are closed promptly after 15 minutes.
+  if (age < PAYMENT_EXPIRY_MS + 60 * 1000) return 60 * 1000;
   if (age < 60 * 60 * 1000) return 5 * 60 * 1000;
   if (age < 24 * 60 * 60 * 1000) return 30 * 60 * 1000;
   return 6 * 60 * 60 * 1000;
