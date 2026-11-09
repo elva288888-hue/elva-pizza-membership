@@ -5,11 +5,18 @@ const cloud = require("wx-server-sdk");
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 
 const WXPAY_HOST = "api.mch.weixin.qq.com";
+const RECONCILE_LIMIT = 20;
+const RECONCILE_MIN_AGE_MS = 20 * 1000;
+const RECONCILE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+let platformCertificatesCache = { expiresAt: 0, certificates: new Map() };
 
 exports.main = async (event = {}) => {
   const { action, payload = {} } = event;
 
   try {
+    if (isTimerEvent(event)) {
+      return await reconcilePendingOrders({ source: "timer" });
+    }
     if (action === "createJsapiOrder") {
       return await createJsapiOrder(payload);
     }
@@ -18,6 +25,13 @@ exports.main = async (event = {}) => {
     }
     if (action === "refundJsapiOrder") {
       return await refundJsapiOrder(payload);
+    }
+    if (action === "reconcilePendingOrders") {
+      assertInternalRequest(payload);
+      return await reconcilePendingOrders({ source: "manual" });
+    }
+    if (action === "handlePaymentNotification") {
+      return await handlePaymentNotification(payload);
     }
 
     return fail(`Unknown action: ${action || "empty"}`);
@@ -122,12 +136,7 @@ async function confirmJsapiOrder(payload = {}) {
   const outTradeNo = String(payload.out_trade_no || payload.outTradeNo || "").trim();
   if (!outTradeNo) return fail("缺少商户订单号 out_trade_no。");
 
-  const payment = await wxpayRequest({
-    method: "GET",
-    path: `/v3/pay/transactions/out-trade-no/${encodeURIComponent(outTradeNo)}?mchid=${encodeURIComponent(config.mchid)}`,
-    body: null,
-    config,
-  });
+  const payment = await queryJsapiOrder(outTradeNo, config);
   if (payment.trade_state !== "SUCCESS") {
     return fail(`微信支付尚未成功：${payment.trade_state_desc || payment.trade_state || "UNKNOWN"}`);
   }
@@ -181,6 +190,180 @@ async function confirmJsapiOrder(payload = {}) {
   });
   if (!confirmed.result?.ok) return fail(confirmed.result?.message || "订单入账失败");
   return ok({ order: confirmed.result.order, transactionId: payment.transaction_id || "" });
+}
+
+async function reconcilePendingOrders({ source = "timer" } = {}) {
+  const db = cloud.database();
+  const now = Date.now();
+  const result = await db.collection("orders")
+    .where({
+      status: "pending_payment",
+      paymentStatus: "unpaid",
+      paymentMethod: "wechat_pay",
+    })
+    .limit(100)
+    .get();
+
+  const candidates = (result.data || [])
+    .filter((order) => shouldReconcileOrder(order, now))
+    .slice(0, RECONCILE_LIMIT);
+  const summary = { source, checked: 0, paid: 0, unpaid: 0, failed: 0, orders: [] };
+
+  for (const order of candidates) {
+    summary.checked += 1;
+    try {
+      const confirmed = await confirmJsapiOrder({ out_trade_no: order.orderNo });
+      if (confirmed.ok) {
+        summary.paid += 1;
+        summary.orders.push({ orderNo: order.orderNo, state: "SUCCESS" });
+      } else {
+        summary.unpaid += 1;
+        summary.orders.push({ orderNo: order.orderNo, state: "NOTPAY" });
+        await recordPaymentCheck(db, order, confirmed.message || "NOTPAY");
+      }
+    } catch (error) {
+      summary.failed += 1;
+      summary.orders.push({ orderNo: order.orderNo, state: "ERROR" });
+      await recordPaymentCheck(db, order, error.message || "ERROR");
+      console.error("[partnerPay.reconcile]", order.orderNo, error);
+    }
+  }
+
+  return ok(summary);
+}
+
+async function queryJsapiOrder(outTradeNo, config = readConfig()) {
+  return wxpayRequest({
+    method: "GET",
+    path: `/v3/pay/transactions/out-trade-no/${encodeURIComponent(outTradeNo)}?mchid=${encodeURIComponent(config.mchid)}`,
+    body: null,
+    config,
+  });
+}
+
+async function handlePaymentNotification(payload = {}) {
+  const headers = normalizeHeaders(payload.headers || {});
+  const bodyText = String(payload.body || "");
+  if (!bodyText) throw new Error("微信支付通知正文为空。");
+
+  const timestamp = headers["wechatpay-timestamp"];
+  const nonce = headers["wechatpay-nonce"];
+  const serial = headers["wechatpay-serial"];
+  const signature = headers["wechatpay-signature"];
+  if (!timestamp || !nonce || !serial || !signature) {
+    throw new Error("微信支付通知签名头不完整。");
+  }
+
+  const config = readConfig();
+  const certificate = await getPlatformCertificate(serial, config);
+  const message = `${timestamp}\n${nonce}\n${bodyText}\n`;
+  const verified = crypto.verify(
+    "RSA-SHA256",
+    Buffer.from(message),
+    certificate,
+    Buffer.from(signature, "base64")
+  );
+  if (!verified) throw new Error("微信支付通知签名验证失败。");
+
+  const notification = safeJson(bodyText);
+  if (notification.event_type !== "TRANSACTION.SUCCESS") {
+    return ok({ ignored: true, eventType: notification.event_type || "" });
+  }
+
+  const payment = decryptNotificationResource(notification.resource, requiredEnv("WXPAY_API_V3_KEY"));
+  if (!payment.out_trade_no) throw new Error("微信支付通知缺少商户订单号。");
+  if (payment.mchid && payment.mchid !== config.mchid) throw new Error("微信支付商户号不匹配。");
+  if (payment.appid && payment.appid !== config.appid) throw new Error("微信支付 AppID 不匹配。");
+
+  // Never trust notification fields alone. Query WeChat Pay again and only
+  // update the order when the server-side transaction status is SUCCESS.
+  return confirmJsapiOrder({ out_trade_no: payment.out_trade_no });
+}
+
+async function getPlatformCertificate(serial, config) {
+  if (platformCertificatesCache.expiresAt > Date.now() && platformCertificatesCache.certificates.has(serial)) {
+    return platformCertificatesCache.certificates.get(serial);
+  }
+
+  const result = await wxpayRequest({
+    method: "GET",
+    path: "/v3/certificates",
+    body: null,
+    config,
+  });
+  const certificates = new Map();
+  for (const item of result.data || []) {
+    if (!item.serial_no || !item.encrypt_certificate) continue;
+    const pem = decryptNotificationResource(item.encrypt_certificate, requiredEnv("WXPAY_API_V3_KEY"), false);
+    certificates.set(String(item.serial_no), String(pem));
+  }
+  platformCertificatesCache = {
+    expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+    certificates,
+  };
+  const certificate = certificates.get(serial);
+  if (!certificate) throw new Error(`未找到微信支付平台证书 ${serial}。`);
+  return certificate;
+}
+
+function decryptNotificationResource(resource = {}, apiV3Key, parseJson = true) {
+  const ciphertext = Buffer.from(String(resource.ciphertext || ""), "base64");
+  if (ciphertext.length <= 16) throw new Error("微信支付通知密文无效。");
+  const authTag = ciphertext.subarray(ciphertext.length - 16);
+  const encrypted = ciphertext.subarray(0, ciphertext.length - 16);
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(String(apiV3Key), "utf8"),
+    Buffer.from(String(resource.nonce || ""), "utf8")
+  );
+  decipher.setAuthTag(authTag);
+  decipher.setAAD(Buffer.from(String(resource.associated_data || ""), "utf8"));
+  const plainText = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+  return parseJson ? safeJson(plainText) : plainText;
+}
+
+function normalizeHeaders(headers = {}) {
+  return Object.fromEntries(Object.entries(headers).map(([key, value]) => [String(key).toLowerCase(), value]));
+}
+
+function shouldReconcileOrder(order, now = Date.now()) {
+  if (!order?.orderNo) return false;
+  const createdAt = Date.parse(order.createdAt || "");
+  if (!Number.isFinite(createdAt)) return false;
+  const age = now - createdAt;
+  if (age < RECONCILE_MIN_AGE_MS || age > RECONCILE_MAX_AGE_MS) return false;
+
+  const lastCheckedAt = Date.parse(order.paymentLastCheckedAt || "");
+  if (!Number.isFinite(lastCheckedAt)) return true;
+  return now - lastCheckedAt >= reconcileIntervalMs(age);
+}
+
+function reconcileIntervalMs(age) {
+  if (age < 10 * 60 * 1000) return 60 * 1000;
+  if (age < 60 * 60 * 1000) return 5 * 60 * 1000;
+  if (age < 24 * 60 * 60 * 1000) return 30 * 60 * 1000;
+  return 6 * 60 * 60 * 1000;
+}
+
+async function recordPaymentCheck(db, order, message) {
+  await db.collection("orders").doc(order._id || order.id).update({
+    data: {
+      paymentLastCheckedAt: new Date().toISOString(),
+      paymentCheckCount: Number(order.paymentCheckCount || 0) + 1,
+      paymentLastCheckResult: String(message || "").slice(0, 200),
+    },
+  });
+}
+
+function isTimerEvent(event = {}) {
+  return Boolean(event.TriggerName || event.Type === "Timer" || event.type === "timer");
+}
+
+function assertInternalRequest(payload = {}) {
+  const expected = requiredEnv("INTERNAL_PAYMENT_SECRET");
+  if (!safeSecretEqual(payload.internalPaymentSecret, expected)) {
+    throw new Error("无权执行支付补单。");
+  }
 }
 
 function readConfig() {
