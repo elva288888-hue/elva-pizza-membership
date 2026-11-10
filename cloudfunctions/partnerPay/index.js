@@ -7,7 +7,6 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const WXPAY_HOST = "api.mch.weixin.qq.com";
 const RECONCILE_LIMIT = 20;
 const RECONCILE_MIN_AGE_MS = 20 * 1000;
-const RECONCILE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 const PAYMENT_EXPIRY_MS = 15 * 60 * 1000;
 let platformCertificatesCache = { expiresAt: 0, certificates: new Map() };
 
@@ -397,7 +396,7 @@ function shouldReconcileOrder(order, now = Date.now()) {
   const createdAt = Date.parse(order.createdAt || "");
   if (!Number.isFinite(createdAt)) return false;
   const age = now - createdAt;
-  if (age < RECONCILE_MIN_AGE_MS || age > RECONCILE_MAX_AGE_MS) return false;
+  if (age < RECONCILE_MIN_AGE_MS) return false;
 
   const lastCheckedAt = Date.parse(order.paymentLastCheckedAt || "");
   if (!Number.isFinite(lastCheckedAt)) return true;
