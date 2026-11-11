@@ -18,7 +18,6 @@ const COLLECTIONS = {
   deliverySettings: "delivery_settings",
   loginCodes: "login_codes",
   adminSessions: "admin_sessions",
-  customerProfiles: "customer_profiles",
   migrationBackups: "migration_backups",
   migrations: "schema_migrations",
 };
@@ -33,25 +32,21 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "getStoreData") return await getStoreData(payload);
+    if (action === "getAdminOrderUpdates") return await getAdminOrderUpdates(payload);
     if (action === "saveStoreData") return await saveStoreData(payload);
     if (action === "sendLoginCode") return await sendLoginCode(payload.phone);
     if (action === "verifyLoginCode") return await verifyLoginCode(payload.phone, payload.code);
     if (action === "sendCustomerBindCode") return await sendCustomerBindCode(payload.phone);
     if (action === "verifyCustomerBindCode") return await verifyCustomerBindCode(payload.phone, payload.code);
-    if (action === "authorizeMiniProgramPhone") return await authorizeMiniProgramPhone(payload);
-    if (action === "createMiniProgramMember") return await createMiniProgramMember(payload);
-    if (action === "joinMiniProgramMember") {
-      return fail("会员注册流程已更新，请先授权手机号，再从会员充值入口加入会员。");
-    }
+    if (action === "joinMiniProgramMember") return await joinMiniProgramMember(payload);
     if (action === "getMiniProgramData") return await getMiniProgramData(payload);
     if (action === "getMiniProgramOrders") return await getMiniProgramOrders(payload);
     if (action === "createMiniProgramPendingOrder") return await createMiniProgramPendingOrder(payload);
     if (action === "createMiniProgramOrder") return await createMiniProgramOrder(payload);
     if (action === "confirmPaidMiniProgramOrder") return await confirmPaidMiniProgramOrder(payload);
     if (action === "recordPaidMiniProgramOrder") return await recordPaidMiniProgramOrder(payload);
+    if (action === "registerPendingMiniProgramRecharge") return await registerPendingMiniProgramRecharge(payload);
     if (action === "confirmPaidMiniProgramRecharge") return await confirmPaidMiniProgramRecharge(payload);
-    if (action === "refundOrder") return await refundOrder(payload);
-    if (action === "refundMiniProgramOrder") return await refundMiniProgramOrder(payload);
     if (action === "migrateSingleStoreData") return await migrateSingleStoreData(payload);
     if (action === "initializeProduction") return await initializeProduction(payload);
 
@@ -61,127 +56,6 @@ exports.main = async (event = {}) => {
     return fail("云函数执行失败，请稍后重试");
   }
 };
-
-async function refundOrder(payload = {}) {
-  const adminSession = await requireAdminSession(payload.sessionToken);
-  if (!adminSession.ok) return adminSession;
-  return await processOrderRefund(payload, adminSession.staffer?.id || null);
-}
-
-async function refundMiniProgramOrder(payload = {}) {
-  const orderId = String(payload.orderId || "").trim();
-  const order = await getDoc(COLLECTIONS.orders, orderId);
-  if (!order) return fail("未找到需要退款的订单。");
-  const openid = getOpenid(payload);
-  if (!openid || openid !== String(order.customerOpenid || "")) {
-    return fail("只能退款当前微信账号提交的订单。");
-  }
-  const remaining = Number((Number(order.totalAmount || 0) - Number(order.refundAmount || 0)).toFixed(2));
-  return await processOrderRefund({
-    ...payload,
-    amount: remaining,
-    reason: String(payload.reason || "顾客在小程序申请退款").trim(),
-  }, null, order);
-}
-
-async function processOrderRefund(payload = {}, staffId = null, loadedOrder = null) {
-  const order = loadedOrder || await getDoc(COLLECTIONS.orders, String(payload.orderId || "").trim());
-  if (!order) return fail("未找到需要退款的订单。");
-  if (order.paymentStatus !== "paid") return fail("只有已支付订单可以退款。");
-  if (order.status !== "pending") return fail("订单接单后不可退款。");
-  const amount = Number(payload.amount);
-  const remaining = Number((Number(order.totalAmount || 0) - Number(order.refundAmount || 0)).toFixed(2));
-  if (!Number.isFinite(amount) || amount <= 0 || amount > remaining) return fail(`退款金额不能超过 ${remaining.toFixed(2)} 元。`);
-  const reason = String(payload.reason || "").trim();
-  if (!reason) return fail("请填写退款原因。");
-
-  const now = new Date().toISOString();
-  const refundId = createId("refund");
-  let method = order.paymentMethod === "member_balance" ? "member_balance" : "cash";
-  let paymentRefund = null;
-  if (order.paymentMethod === "wechat_pay") {
-    method = "wechat_pay";
-    const cumulativeCents = Math.round((Number(order.refundAmount || 0) + amount) * 100);
-    const outRefundNo = `RF${order.orderNo}${cumulativeCents}`.slice(0, 64);
-    const result = await cloud.callFunction({
-      name: process.env.PAYMENT_FUNCTION || "partnerPay",
-      data: {
-        action: "refundJsapiOrder",
-        payload: {
-          out_trade_no: order.orderNo,
-          out_refund_no: outRefundNo,
-          reason,
-          amount: {
-            refund: Math.round(amount * 100),
-            total: Math.round(Number(order.totalAmount || 0) * 100),
-          },
-          internalPaymentSecret: requiredInternalPaymentSecret(),
-        },
-      },
-    });
-    if (!result.result?.ok) return fail(result.result?.message || "微信支付退款申请失败，订单未做退款处理。");
-    paymentRefund = result.result;
-  }
-
-  let member = order.memberId ? await getDoc(COLLECTIONS.members, order.memberId) : null;
-  if (method === "member_balance" && member) {
-    const balance = Number((Number(member.balance || 0) + amount).toFixed(2));
-    member = { ...member, balance, updatedAt: now };
-    await upsert(COLLECTIONS.members, member.id, member);
-    const recordId = createId("record");
-    await upsert(COLLECTIONS.transactions, recordId, {
-      id: recordId,
-      memberId: member.id,
-      memberName: member.name,
-      memberPhone: member.phone,
-      memberCard: member.card,
-      storeId: order.storeId,
-      staffId,
-      type: "refund",
-      amount,
-      bonusAmount: 0,
-      balanceAfter: balance,
-      orderId: order.id,
-      orderNo: order.orderNo,
-      paymentMethod: method,
-      note: `订单 ${order.orderNo} 退款：${reason}`,
-      createdAt: now,
-    });
-  }
-
-  const refund = {
-    id: refundId,
-    storeId: order.storeId,
-    orderId: order.id,
-    memberId: order.memberId || "",
-    amount,
-    reason,
-    method,
-    status: paymentRefund?.status === "SUCCESS" ? "completed" : (paymentRefund ? "processing" : "completed"),
-    paymentRefundId: paymentRefund?.refundId || "",
-    outRefundNo: paymentRefund?.outRefundNo || "",
-    staffId,
-    createdAt: now,
-  };
-  await upsert(COLLECTIONS.refunds, refund.id, refund);
-  const refundAmount = Number((Number(order.refundAmount || 0) + amount).toFixed(2));
-  const updatedOrder = {
-    ...order,
-    refundAmount,
-    refundReason: reason,
-    refundMethod: method,
-    status: refundAmount >= Number(order.totalAmount || 0) ? "refunded" : "partial_refund",
-    updatedAt: now,
-  };
-  await upsert(COLLECTIONS.orders, updatedOrder.id, updatedOrder);
-  return ok({ order: updatedOrder, refund, member });
-}
-
-function requiredInternalPaymentSecret() {
-  const secret = String(process.env.INTERNAL_PAYMENT_SECRET || "").trim();
-  if (!secret) throw new Error("缺少云函数环境变量 INTERNAL_PAYMENT_SECRET");
-  return secret;
-}
 
 async function initializeProduction(payload = {}) {
   if (!isTrustedPaymentConfirmation(payload)) return fail("初始化授权无效。");
@@ -221,6 +95,15 @@ async function getStoreData(payload = {}) {
   });
 }
 
+async function getAdminOrderUpdates(payload = {}) {
+  const adminSession = await requireAdminSession(payload.sessionToken);
+  if (!adminSession.ok) return adminSession;
+  return ok({
+    orders: await safeGetAll(COLLECTIONS.orders),
+    checkedAt: new Date().toISOString(),
+  });
+}
+
 async function saveStoreData(payload = {}) {
   const adminSession = await requireAdminSession(payload.sessionToken);
   if (!adminSession.ok) return adminSession;
@@ -234,14 +117,7 @@ async function saveStoreData(payload = {}) {
   } else {
     warnings.push("店员无权修改店员管理数据，相关更改已忽略");
   }
-  const existingMembers = await safeGetAll(COLLECTIONS.members);
-  const existingMemberMap = new Map(existingMembers.map((member) => [member.id, member]));
-  const submittedMembers = data.members || [];
-  if (submittedMembers.some((member) => !existingMemberMap.has(member.id))) {
-    warnings.push("后台不允许新增会员；新会员须由顾客在小程序充值时创建");
-  }
-  // Membership identity, profile and balance are customer-owned and may only
-  // be changed by the mini-program membership/payment flows.
+  await safeMergeCollection(COLLECTIONS.members, data.members || [], warnings);
   await safeMergeCollection(COLLECTIONS.transactions, data.records || [], warnings);
   await safeReplaceCollection(COLLECTIONS.categories, data.categories || [], warnings);
   // Products may be edited from more than one browser. Never replace the whole
@@ -280,15 +156,12 @@ async function getMiniProgramData(payload = {}) {
   }
   const storeId = await resolveStoreId(payload.storeId);
   const openid = getOpenid(payload);
-  const profile = openid ? await getCustomerProfile(openid) : null;
-  const phone = normalizePhone(profile?.phone || payload.phone);
+  const phone = normalizePhone(payload.phone);
   const [store, rawProducts, categories, member, deliverySettings] = await Promise.all([
     getDoc(COLLECTIONS.stores, storeId),
     getProductsByStore(storeId),
     getCategoriesByStore(storeId),
-    phone
-      ? findMemberByPhone(phone, storeId)
-      : (openid ? findMemberByOpenid(openid, storeId) : Promise.resolve(null)),
+    phone ? findMemberByPhone(phone, storeId) : Promise.resolve(null),
     getDeliverySettings(),
   ]);
   const products = await resolveProductImageUrls(rawProducts);
@@ -296,9 +169,7 @@ async function getMiniProgramData(payload = {}) {
   return ok({
     customer: {
       openid,
-      phone: member?.phone || phone,
-      name: member?.name || profile?.name || "",
-      phoneAuthorized: Boolean(member?.phone || phone),
+      phone,
     },
     store,
     products,
@@ -365,8 +236,6 @@ async function joinMiniProgramMember(payload = {}) {
   await ensureDefaultStore();
   const phoneCode = String(payload.phoneCode || "").trim();
   if (!phoneCode) return fail("未取得手机号授权，请重新点击加入会员。");
-  const name = String(payload.name || "").trim();
-  if (!name || name === "微信顾客") return fail("请先填写会员昵称。");
 
   let phoneResult;
   try {
@@ -384,72 +253,12 @@ async function joinMiniProgramMember(payload = {}) {
   const openid = getOpenid(payload);
   const member = await getOrCreateCloudMember({
     storeId,
-    name,
+    name: String(payload.name || "微信顾客").trim() || "微信顾客",
     phone,
     openid,
   });
 
-  return ok({ customer: { openid, phone, name: member.name }, member });
-}
-
-async function authorizeMiniProgramPhone(payload = {}) {
-  const phoneCode = String(payload.phoneCode || "").trim();
-  if (!phoneCode) return fail("未取得手机号授权，请重新授权。");
-  const openid = getOpenid(payload);
-  if (!openid) return fail("未取得微信身份，请重新进入小程序。");
-
-  let phoneResult;
-  try {
-    phoneResult = await cloud.openapi.phonenumber.getPhoneNumber({ code: phoneCode });
-  } catch (error) {
-    console.error("[get phone number failed]", error);
-    return fail("手机号授权失败，请重新授权。");
-  }
-  const phoneInfo = phoneResult?.phoneInfo || phoneResult?.result?.phoneInfo || {};
-  const phone = normalizePhone(phoneInfo.purePhoneNumber || phoneInfo.phoneNumber);
-  if (!/^1\d{10}$/.test(phone)) return fail("未能取得有效手机号，请重新授权。");
-
-  const storeId = await resolveStoreId(payload.storeId);
-  const profile = {
-    id: customerProfileId(openid),
-    openid,
-    phone,
-    storeId,
-    phoneAuthorizedAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  await upsert(COLLECTIONS.customerProfiles, profile.id, profile);
-  const member = await findMemberByPhone(phone, storeId);
-  if (member && member.openid !== openid) {
-    await upsert(COLLECTIONS.members, member.id, { ...member, openid, updatedAt: new Date().toISOString() });
-  }
-  return ok({
-    customer: { openid, phone, phoneAuthorized: true },
-    member: member ? { ...member, openid } : null,
-  });
-}
-
-async function createMiniProgramMember(payload = {}) {
-  const openid = getOpenid(payload);
-  const profile = openid ? await getCustomerProfile(openid) : null;
-  if (!profile?.phone) return fail("请先完成手机号授权。");
-  const name = String(payload.name || "").trim();
-  if (!name || name === "微信顾客") return fail("请先填写会员昵称。");
-  const storeId = await resolveStoreId(profile.storeId || payload.storeId);
-  // Enforce the one-phone-one-member invariant before the explicit enrollment
-  // write, including historical duplicates created by older versions.
-  await repairDuplicateMembers();
-  const member = await getOrCreateCloudMember({ storeId, name, phone: profile.phone, openid });
-  await upsert(COLLECTIONS.customerProfiles, profile.id, {
-    ...profile,
-    name: member.name,
-    memberId: member.id,
-    updatedAt: new Date().toISOString(),
-  });
-  return ok({
-    customer: { openid, phone: profile.phone, name: member.name, phoneAuthorized: true },
-    member,
-  });
+  return ok({ customer: { openid, phone }, member });
 }
 
 async function confirmPaidMiniProgramRecharge(payload = {}) {
@@ -467,12 +276,11 @@ async function confirmPaidMiniProgramRecharge(payload = {}) {
   if (!memberId || !openid) return fail("会员身份无效，请重新进入小程序后再试。");
 
   const member = await getDoc(COLLECTIONS.members, memberId);
-  if (!member || String(member.openid || "") !== openid) {
-    return fail("当前微信账号与会员不匹配，无法充值。");
-  }
+  if (!member) return fail("未找到充值对应的会员。");
 
   const existing = await findRechargeRecord(rechargeNo);
   if (existing) {
+    await completePendingRecharge(rechargeNo, payload.paymentTradeNo || "");
     return ok({ member, record: existing, duplicated: true });
   }
 
@@ -503,6 +311,8 @@ async function confirmPaidMiniProgramRecharge(payload = {}) {
     orderNo: rechargeNo,
     paymentMethod: "wechat_pay",
     paymentTradeNo: String(payload.paymentTradeNo || ""),
+    payerOpenid: openid,
+    payerMatchedMember: !member.openid || String(member.openid) === openid,
     itemsText: "",
     note: bonusAmount > 0
       ? `小程序会员充值 ${rechargeNo}，赠送 ${bonusAmount.toFixed(2)} 元`
@@ -510,8 +320,66 @@ async function confirmPaidMiniProgramRecharge(payload = {}) {
     createdAt: new Date().toISOString(),
   };
   await upsert(COLLECTIONS.transactions, recordId, record);
+  await completePendingRecharge(rechargeNo, payload.paymentTradeNo || "");
 
   return ok({ member: updatedMember, record });
+}
+
+async function registerPendingMiniProgramRecharge(payload = {}) {
+  if (!isTrustedPaymentConfirmation(payload)) return fail("充值登记来源无效。");
+  const rechargeNo = String(payload.rechargeNo || payload.outTradeNo || payload.out_trade_no || "").trim();
+  const paidTotalInCents = Number(payload.totalInCents || payload.paidTotalInCents);
+  const memberId = String(payload.memberId || "").trim();
+  const payerOpenid = String(payload.payerOpenid || "").trim();
+  if (!rechargeNo || !memberId || !payerOpenid) return fail("充值登记信息不完整。");
+  if (!Number.isInteger(paidTotalInCents) || paidTotalInCents < 1 || paidTotalInCents > 500000) {
+    return fail("充值金额须在 0.01 元至 5000 元之间。");
+  }
+  const member = await getDoc(COLLECTIONS.members, memberId);
+  if (!member) return fail("未找到充值对应的会员。");
+  const existing = await findPendingRechargeRecord(rechargeNo);
+  if (existing) return ok({ pending: existing, duplicated: true });
+  const now = new Date().toISOString();
+  const id = `pending_recharge_${crypto.createHash("sha256").update(rechargeNo).digest("hex").slice(0, 24)}`;
+  const pending = {
+    id,
+    memberId: member.id,
+    memberName: member.name || "微信顾客",
+    memberPhone: member.phone || "",
+    memberCard: member.card || "",
+    storeId: member.storeId || DEFAULT_STORE_ID,
+    type: "recharge_pending",
+    status: "pending",
+    paymentStatus: "unpaid",
+    amount: Number((paidTotalInCents / 100).toFixed(2)),
+    orderNo: rechargeNo,
+    payerOpenid,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await upsert(COLLECTIONS.transactions, id, pending);
+  return ok({ pending });
+}
+
+async function findPendingRechargeRecord(rechargeNo) {
+  const result = await db.collection(COLLECTIONS.transactions)
+    .where({ orderNo: rechargeNo, type: "recharge_pending" })
+    .limit(1)
+    .get();
+  return result.data?.[0] ? removeCloudId(result.data[0]) : null;
+}
+
+async function completePendingRecharge(rechargeNo, paymentTradeNo) {
+  const pending = await findPendingRechargeRecord(rechargeNo);
+  if (!pending) return;
+  await upsert(COLLECTIONS.transactions, pending.id, {
+    ...pending,
+    status: "completed",
+    paymentStatus: "paid",
+    paymentTradeNo: String(paymentTradeNo || pending.paymentTradeNo || ""),
+    completedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 async function getRechargeBonus(amount, storeId = DEFAULT_STORE_ID) {
@@ -683,9 +551,15 @@ async function buildMiniProgramOrderDraft(payload = {}, payment = {}) {
   const fulfillment = buildFulfillmentInfo(payload, deliverySettings);
   if (!fulfillment.ok) return fulfillment;
 
-  // A normal order must not enroll the customer as a member. Membership is
-  // created only from the explicit recharge/member action.
-  const member = phone ? await findMemberByPhone(phone, storeId) : null;
+  let member = null;
+  if (phone) {
+    member = await getOrCreateCloudMember({
+      storeId,
+      name,
+      phone,
+      openid,
+    });
+  }
 
   const goodsAmount = Number(items.reduce((sum, item) => sum + item.price * item.quantity, 0).toFixed(2));
   const deliveryFee = fulfillment.fulfillmentType === "delivery" && goodsAmount < deliverySettings.freeThreshold
@@ -715,15 +589,12 @@ async function buildMiniProgramOrderDraft(payload = {}, payment = {}) {
     paymentMethod: payment.paymentMethod || payload.paymentMethod || "wechat_pay",
     paymentTradeNo: payment.paymentTradeNo || "",
     paymentRedirect: "mini_program",
-    orderChannel: "mini_program",
     paymentExternalUrl: "",
     fulfillmentType: fulfillment.fulfillmentType,
     pickupMode: fulfillment.pickupMode,
     pickupDate: fulfillment.pickupDate,
     pickupTime: fulfillment.pickupTime,
     deliveryAddress: fulfillment.deliveryAddress,
-    deliveryRecipientName: fulfillment.deliveryRecipientName,
-    deliveryRecipientPhone: fulfillment.deliveryRecipientPhone,
     deliveryDate: fulfillment.deliveryDate,
     deliveryTime: fulfillment.deliveryTime,
     deliveryLatitude: fulfillment.deliveryLatitude,
@@ -1385,44 +1256,13 @@ async function findMemberByPhone(phone, storeId = DEFAULT_STORE_ID) {
   return anyStoreResult.data?.[0] ? removeCloudId(anyStoreResult.data[0]) : null;
 }
 
-function customerProfileId(openid) {
-  return `customer_${crypto.createHash("sha256").update(String(openid)).digest("hex").slice(0, 32)}`;
-}
-
-async function getCustomerProfile(openid) {
-  if (!openid) return null;
-  return getDoc(COLLECTIONS.customerProfiles, customerProfileId(openid));
-}
-
-async function findMemberByOpenid(openid, storeId = DEFAULT_STORE_ID) {
-  if (!openid) return null;
-  const storeResult = await db
-    .collection(COLLECTIONS.members)
-    .where({ openid, storeId })
-    .limit(1)
-    .get();
-  if (storeResult.data?.[0]) return removeCloudId(storeResult.data[0]);
-
-  const anyStoreResult = await db
-    .collection(COLLECTIONS.members)
-    .where({ openid })
-    .limit(1)
-    .get();
-  return anyStoreResult.data?.[0] ? removeCloudId(anyStoreResult.data[0]) : null;
-}
-
 async function getOrCreateCloudMember({ storeId, name, phone, openid }) {
   const existing = await findMemberByPhone(phone, storeId);
   if (existing) {
     const updated = {
       ...existing,
       storeId,
-      // Phone authorization proves this is the member's mini-program login.
-      // The submitted mini-program nickname is authoritative so both clients
-      // display the same identity, regardless of an older back-office name.
-      name,
-      nameSource: "mini_program_member_input",
-      nameConfirmedAt: new Date().toISOString(),
+      name: existing.name && existing.name !== "微信顾客" ? existing.name : name,
       openid: existing.openid || openid,
       updatedAt: new Date().toISOString(),
     };
@@ -1434,8 +1274,6 @@ async function getOrCreateCloudMember({ storeId, name, phone, openid }) {
     id: memberIdForPhone(storeId, phone),
     storeId,
     name,
-    nameSource: "mini_program_member_input",
-    nameConfirmedAt: new Date().toISOString(),
     phone,
     openid,
     card: await nextCloudCardNumber(),
@@ -1628,8 +1466,6 @@ function buildFulfillmentInfo(payload = {}, deliverySettings = normalizeDelivery
   const pickupDate = String(payload.pickupDate || "").trim();
   const pickupTime = String(payload.pickupTime || "").trim();
   const deliveryAddress = String(payload.deliveryAddress || "").trim();
-  const deliveryRecipientName = String(payload.deliveryRecipientName || "").trim();
-  const deliveryRecipientPhone = normalizePhone(payload.deliveryRecipientPhone);
   const deliveryDate = String(payload.deliveryDate || "").trim();
   const deliveryTime = String(payload.deliveryTime || "").trim();
   const deliveryLatitude = Number(payload.deliveryLatitude);
@@ -1641,8 +1477,6 @@ function buildFulfillmentInfo(payload = {}, deliverySettings = normalizeDelivery
   if (fulfillmentType === "delivery" && !deliveryAddress) {
     return fail("请填写配送地址。");
   }
-  if (fulfillmentType === "delivery" && !deliveryRecipientName) return fail("请填写收货人姓名。");
-  if (fulfillmentType === "delivery" && !/^1\d{10}$/.test(deliveryRecipientPhone)) return fail("请填写正确的收货人手机号。");
   if (fulfillmentType === "delivery") {
     if (!Number.isFinite(deliverySettings.storeLatitude) || !Number.isFinite(deliverySettings.storeLongitude)) {
       return fail("门店尚未配置配送定位，请联系店员。");
@@ -1668,8 +1502,6 @@ function buildFulfillmentInfo(payload = {}, deliverySettings = normalizeDelivery
     pickupDate,
     pickupTime,
     deliveryAddress,
-    deliveryRecipientName: fulfillmentType === "delivery" ? deliveryRecipientName : "",
-    deliveryRecipientPhone: fulfillmentType === "delivery" ? deliveryRecipientPhone : "",
     deliveryDate,
     deliveryTime,
     deliveryLatitude: fulfillmentType === "delivery" ? deliveryLatitude : null,
