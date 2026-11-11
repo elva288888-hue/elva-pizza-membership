@@ -70,6 +70,24 @@ async function createJsapiOrder(payload = {}) {
 
   if (payload.attach) requestBody.attach = String(payload.attach).slice(0, 128);
 
+  if (requestBody.attach?.startsWith("recharge:")) {
+    const memberId = requestBody.attach.slice("recharge:".length).trim();
+    const registered = await cloud.callFunction({
+      name: process.env.MEMBERSHIP_FUNCTION || "membershipApi",
+      data: {
+        action: "registerPendingMiniProgramRecharge",
+        payload: {
+          rechargeNo: outTradeNo,
+          memberId,
+          totalInCents: total,
+          payerOpenid: openid,
+          internalPaymentSecret: requiredEnv("INTERNAL_PAYMENT_SECRET"),
+        },
+      },
+    });
+    if (!registered.result?.ok) return fail(registered.result?.message || "充值登记失败");
+  }
+
   const wxpayResult = await wxpayRequest({
     method: "POST",
     path: "/v3/pay/transactions/jsapi",
@@ -244,7 +262,92 @@ async function reconcilePendingOrders({ source = "timer" } = {}) {
     }
   }
 
+  summary.recharges = await reconcilePendingRecharges(db, now);
+
   return ok(summary);
+}
+
+async function reconcilePendingRecharges(db, now = Date.now()) {
+  const result = await db.collection("transactions")
+    .where({ type: "recharge_pending", status: "pending", paymentStatus: "unpaid" })
+    .limit(100)
+    .get();
+  const candidates = (result.data || [])
+    .filter((record) => shouldReconcileOrder(record, now))
+    .slice(0, RECONCILE_LIMIT);
+  const summary = { checked: 0, paid: 0, unpaid: 0, closed: 0, failed: 0, recharges: [] };
+  for (const recharge of candidates) {
+    summary.checked += 1;
+    try {
+      const payment = await queryJsapiOrder(recharge.orderNo);
+      if (payment.trade_state === "SUCCESS") {
+        const confirmed = await confirmJsapiOrder({ out_trade_no: recharge.orderNo });
+        if (!confirmed.ok) throw new Error(confirmed.message || "充值入账失败");
+        summary.paid += 1;
+        summary.recharges.push({ rechargeNo: recharge.orderNo, state: "SUCCESS" });
+      } else if (payment.trade_state === "CLOSED") {
+        await markPendingRechargeClosed(db, recharge, "微信支付充值单已关闭");
+        summary.closed += 1;
+        summary.recharges.push({ rechargeNo: recharge.orderNo, state: "CLOSED" });
+      } else if (payment.trade_state === "NOTPAY" && isPaymentExpired(recharge, now)) {
+        const state = await closeExpiredRecharge(db, recharge);
+        summary[state === "SUCCESS" ? "paid" : "closed"] += 1;
+        summary.recharges.push({ rechargeNo: recharge.orderNo, state });
+      } else {
+        summary.unpaid += 1;
+        const state = payment.trade_state || "UNKNOWN";
+        summary.recharges.push({ rechargeNo: recharge.orderNo, state });
+        await recordPaymentCheck(db, recharge, payment.trade_state_desc || state, "transactions");
+      }
+    } catch (error) {
+      summary.failed += 1;
+      summary.recharges.push({ rechargeNo: recharge.orderNo, state: "ERROR" });
+      await recordPaymentCheck(db, recharge, error.message || "ERROR", "transactions");
+      console.error("[partnerPay.reconcileRecharge]", recharge.orderNo, error);
+    }
+  }
+  return summary;
+}
+
+async function closeExpiredRecharge(db, recharge) {
+  const config = readConfig();
+  try {
+    await wxpayRequest({
+      method: "POST",
+      path: `/v3/pay/transactions/out-trade-no/${encodeURIComponent(recharge.orderNo)}/close`,
+      body: { mchid: config.mchid },
+      config,
+    });
+    await markPendingRechargeClosed(db, recharge, "待支付超过15分钟，系统自动关闭充值单");
+    return "CLOSED";
+  } catch (error) {
+    const latest = await queryJsapiOrder(recharge.orderNo, config);
+    if (latest.trade_state === "SUCCESS") {
+      const confirmed = await confirmJsapiOrder({ out_trade_no: recharge.orderNo });
+      if (!confirmed.ok) throw new Error(confirmed.message || "充值入账失败");
+      return "SUCCESS";
+    }
+    if (latest.trade_state === "CLOSED") {
+      await markPendingRechargeClosed(db, recharge, "待支付超过15分钟，微信支付充值单已关闭");
+      return "CLOSED";
+    }
+    throw error;
+  }
+}
+
+async function markPendingRechargeClosed(db, recharge, reason) {
+  const timestamp = new Date().toISOString();
+  await db.collection("transactions").doc(recharge._id || recharge.id).update({
+    data: {
+      status: "cancelled",
+      paymentStatus: "unpaid",
+      cancellationReason: reason,
+      paymentClosedAt: timestamp,
+      paymentLastCheckedAt: timestamp,
+      paymentLastCheckResult: "CLOSED",
+      updatedAt: timestamp,
+    },
+  });
 }
 
 async function closeExpiredOrder(db, order) {
@@ -412,8 +515,8 @@ function reconcileIntervalMs(age) {
   return 6 * 60 * 60 * 1000;
 }
 
-async function recordPaymentCheck(db, order, message) {
-  await db.collection("orders").doc(order._id || order.id).update({
+async function recordPaymentCheck(db, order, message, collection = "orders") {
+  await db.collection(collection).doc(order._id || order.id).update({
     data: {
       paymentLastCheckedAt: new Date().toISOString(),
       paymentCheckCount: Number(order.paymentCheckCount || 0) + 1,
