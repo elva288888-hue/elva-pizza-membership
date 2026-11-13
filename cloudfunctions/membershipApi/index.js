@@ -33,6 +33,7 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "getStoreData") return await getStoreData(payload);
+    if (action === "getAdminOrderUpdates") return await getAdminOrderUpdates(payload);
     if (action === "saveStoreData") return await saveStoreData(payload);
     if (action === "sendLoginCode") return await sendLoginCode(payload.phone);
     if (action === "verifyLoginCode") return await verifyLoginCode(payload.phone, payload.code);
@@ -267,6 +268,19 @@ async function getStoreData(payload = {}) {
       },
       session: null,
     },
+  });
+}
+
+async function getAdminOrderUpdates(payload = {}) {
+  const adminSession = await requireAdminSession(payload.sessionToken);
+  if (!adminSession.ok) return adminSession;
+  const result = await db.collection(COLLECTIONS.orders)
+    .where({ storeId: adminSession.staffer?.storeId || adminSession.session?.storeId || DEFAULT_STORE_ID })
+    .limit(1000)
+    .get();
+  return ok({
+    orders: (result.data || []).map(removeCloudId),
+    checkedAt: new Date().toISOString(),
   });
 }
 
