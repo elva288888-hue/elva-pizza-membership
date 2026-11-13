@@ -44,7 +44,7 @@ exports.main = async (event = {}) => {
 async function createJsapiOrder(payload = {}) {
   const config = readConfig();
   const wxContext = cloud.getWXContext();
-  const openid = String(payload.openid || wxContext.OPENID || "").trim();
+  const openid = String(wxContext.OPENID || "").trim();
   const outTradeNo = String(payload.out_trade_no || payload.outTradeNo || "").trim();
   const description = String(payload.description || "爱娃披萨订单").trim().slice(0, 127);
   const total = Number(payload.amount?.total || payload.totalFee || 0);
@@ -263,8 +263,58 @@ async function reconcilePendingOrders({ source = "timer" } = {}) {
   }
 
   summary.recharges = await reconcilePendingRecharges(db, now);
+  summary.refunds = await reconcilePendingRefunds(db);
 
   return ok(summary);
+}
+
+async function reconcilePendingRefunds(db) {
+  const result = await db.collection("refunds").where({ status: "processing" }).limit(100).get();
+  const summary = { checked: 0, completed: 0, failed: 0, processing: 0 };
+  for (const refund of (result.data || []).filter((item) => item.method === "wechat_pay").slice(0, 20)) {
+    summary.checked += 1;
+    try {
+      const paymentRefund = await queryRefund(refund.outRefundNo);
+      await confirmMembershipRefund(paymentRefund);
+      if (paymentRefund.status === "SUCCESS") summary.completed += 1;
+      else if (["CLOSED", "ABNORMAL"].includes(paymentRefund.status)) summary.failed += 1;
+      else summary.processing += 1;
+    } catch (error) {
+      summary.failed += 1;
+      console.error("[partnerPay.reconcileRefund]", refund.outRefundNo, error);
+    }
+  }
+  return summary;
+}
+
+async function queryRefund(outRefundNo, config = readConfig()) {
+  return wxpayRequest({
+    method: "GET",
+    path: `/v3/refund/domestic/refunds/${encodeURIComponent(outRefundNo)}`,
+    body: null,
+    config,
+  });
+}
+
+async function confirmMembershipRefund(paymentRefund = {}) {
+  const status = String(paymentRefund.status || "").toUpperCase();
+  if (!["SUCCESS", "CLOSED", "ABNORMAL"].includes(status)) return ok({ processing: true });
+  const confirmed = await cloud.callFunction({
+    name: process.env.MEMBERSHIP_FUNCTION || "membershipApi",
+    data: {
+      action: "confirmRefundResult",
+      payload: {
+        outRefundNo: paymentRefund.out_refund_no,
+        paymentRefundId: paymentRefund.refund_id || "",
+        refundInCents: Number(paymentRefund.amount?.refund),
+        status,
+        failureReason: paymentRefund.user_received_account || status,
+        internalPaymentSecret: requiredEnv("INTERNAL_PAYMENT_SECRET"),
+      },
+    },
+  });
+  if (!confirmed.result?.ok) throw new Error(confirmed.result?.message || "退款结果落账失败");
+  return confirmed.result;
 }
 
 async function reconcilePendingRecharges(db, now = Date.now()) {
@@ -434,6 +484,12 @@ async function handlePaymentNotification(payload = {}) {
   if (!verified) throw new Error("微信支付通知签名验证失败。");
 
   const notification = safeJson(bodyText);
+  if (notification.event_type === "REFUND.SUCCESS") {
+    const refund = decryptNotificationResource(notification.resource, requiredEnv("WXPAY_API_V3_KEY"));
+    if (!refund.out_refund_no) throw new Error("微信退款通知缺少商户退款单号。");
+    const verifiedRefund = await queryRefund(refund.out_refund_no, config);
+    return confirmMembershipRefund(verifiedRefund);
+  }
   if (notification.event_type !== "TRANSACTION.SUCCESS") {
     return ok({ ignored: true, eventType: notification.event_type || "" });
   }

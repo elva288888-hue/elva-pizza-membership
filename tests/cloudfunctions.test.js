@@ -9,6 +9,7 @@ function matches(row, criteria) {
 }
 
 function createDatabase(seed = {}) {
+  let transactionQueue = Promise.resolve();
   const collections = new Map(
     Object.entries(seed).map(([name, rows]) => [
       name,
@@ -23,6 +24,11 @@ function createDatabase(seed = {}) {
 
   return {
     collections,
+    runTransaction(callback) {
+      const transaction = transactionQueue.then(() => callback(this));
+      transactionQueue = transaction.catch(() => {});
+      return transaction;
+    },
     createCollection: async (name) => {
       getCollection(name);
     },
@@ -178,6 +184,13 @@ function baseSeed() {
     orders: [],
     refunds: [],
     bonusrules: [],
+    customer_profiles: [{
+      _id: "customer_a8e41902008a57207123ccaed76fe38d",
+      id: "customer_a8e41902008a57207123ccaed76fe38d",
+      openid: "openid-test",
+      phone: "13900000000",
+      storeId: "store_aiwa_pizza_main",
+    }],
   };
 }
 
@@ -336,7 +349,7 @@ test("wechat paid order refund uses the original payment channel without crediti
   assert.equal(result.refund.status, "processing");
   assert.equal(database.collections.get("members").get("member-1").balance, 100);
   assert.equal(database.collections.get("transactions").size, 0);
-  assert.equal(database.collections.get("orders").get("order-wechat-1").refundAmount, 10);
+  assert.equal(database.collections.get("orders").get("order-wechat-1").refundAmount, 0);
 });
 
 test("wechat refund failure leaves order and member balance unchanged", async () => {
@@ -372,8 +385,73 @@ test("wechat refund failure leaves order and member balance unchanged", async ()
 
   assert.equal(result.ok, false);
   assert.equal(database.collections.get("members").get("member-1").balance, 100);
-  assert.equal(database.collections.get("refunds").size, 0);
+  assert.equal(database.collections.get("refunds").size, 1);
+  assert.equal(Array.from(database.collections.get("refunds").values())[0].status, "failed");
   assert.equal(database.collections.get("orders").get("order-wechat-failed").refundAmount, 0);
+});
+
+test("concurrent recharge confirmations credit the member exactly once", async () => {
+  const { main, database } = loadMembershipApi(baseSeed());
+  const payload = {
+    rechargeNo: "RC-CONCURRENT-1", memberId: "member-1", paidTotalInCents: 10000,
+    payerOpenid: "openid-test", paymentTradeNo: "WX-CONCURRENT-1",
+    internalPaymentSecret: "test-payment-secret",
+  };
+  const results = await Promise.all([
+    main({ action: "confirmPaidMiniProgramRecharge", payload }),
+    main({ action: "confirmPaidMiniProgramRecharge", payload }),
+  ]);
+  assert.equal(results.every((result) => result.ok), true);
+  assert.equal(database.collections.get("members").get("member-1").balance, 200);
+  assert.equal(Array.from(database.collections.get("transactions").values()).filter((row) => row.type === "recharge").length, 1);
+});
+
+test("concurrent balance orders cannot spend more than the member balance", async () => {
+  const seed = baseSeed();
+  seed.members[0].balance = 60;
+  const { main, database } = loadMembershipApi(seed);
+  const order = (suffix) => main({
+    action: "createMiniProgramOrder",
+    payload: {
+      orderId: `balance-order-${suffix}`, orderNo: `BALANCE-${suffix}`,
+      storeId: "store_aiwa_pizza_main", customer: { phone: "13900000000", name: "自动化会员" },
+      items: [{ productId: "product-1", quantity: 1 }], fulfillmentType: "pickup",
+      pickupMode: "now", paymentMethod: "member_balance",
+    },
+  });
+  const results = await Promise.all([order("A"), order("B")]);
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(database.collections.get("members").get("member-1").balance, 21);
+  assert.equal(database.collections.get("orders").size, 1);
+});
+
+test("wechat processing refund changes order only after verified success", async () => {
+  const seed = baseSeed();
+  const sessionToken = "f".repeat(64);
+  seed.admin_sessions = [{ _id: sessionToken, id: sessionToken, staffId: "staff_aiwa_manager", storeId: "store_aiwa_pizza_main", expiresAt: Date.now() + 3600000 }];
+  seed.orders.push({ _id: "refund-order-verified", id: "refund-order-verified", orderNo: "OD-REFUND-VERIFIED", storeId: "store_aiwa_pizza_main", memberId: "member-1", totalAmount: 39, refundAmount: 0, paymentStatus: "paid", paymentMethod: "wechat_pay", status: "pending" });
+  const { main, database } = loadMembershipApi(seed);
+  const requested = await main({ action: "refundOrder", payload: { sessionToken, orderId: "refund-order-verified", amount: 10, reason: "测试" } });
+  assert.equal(requested.refund.status, "processing");
+  assert.equal(database.collections.get("orders").get("refund-order-verified").refundAmount, 0);
+  const completed = await main({ action: "confirmRefundResult", payload: {
+    outRefundNo: requested.refund.outRefundNo, paymentRefundId: "WX-REFUND-DONE",
+    refundInCents: 1000, status: "SUCCESS", internalPaymentSecret: "test-payment-secret",
+  } });
+  assert.equal(completed.ok, true);
+  assert.equal(database.collections.get("orders").get("refund-order-verified").refundAmount, 10);
+  assert.equal(completed.refund.status, "completed");
+});
+
+test("customer order lookup ignores spoofed openid and phone", async () => {
+  const seed = baseSeed();
+  seed.orders.push(
+    { _id: "own-order", id: "own-order", orderNo: "OWN", storeId: "store_aiwa_pizza_main", customerOpenid: "openid-test", customerPhone: "13900000000", createdAt: "2026-01-02T00:00:00.000Z" },
+    { _id: "other-order", id: "other-order", orderNo: "OTHER", storeId: "store_aiwa_pizza_main", customerOpenid: "openid-other", customerPhone: "13800000000", createdAt: "2026-01-01T00:00:00.000Z" },
+  );
+  const { main } = loadMembershipApi(seed, "openid-test");
+  const result = await main({ action: "getMiniProgramOrders", payload: { openid: "openid-other", phone: "13800000000" } });
+  assert.deepEqual(Array.from(result.orders, (order) => order.orderNo), ["OWN"]);
 });
 
 test("accepted orders cannot be refunded", async () => {

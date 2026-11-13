@@ -33,6 +33,7 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "getStoreData") return await getStoreData(payload);
+    if (action === "getAdminOrderUpdates") return await getAdminOrderUpdates(payload);
     if (action === "saveStoreData") return await saveStoreData(payload);
     if (action === "sendLoginCode") return await sendLoginCode(payload.phone);
     if (action === "verifyLoginCode") return await verifyLoginCode(payload.phone, payload.code);
@@ -53,6 +54,7 @@ exports.main = async (event = {}) => {
     if (action === "confirmPaidMiniProgramRecharge") return await confirmPaidMiniProgramRecharge(payload);
     if (action === "refundOrder") return await refundOrder(payload);
     if (action === "refundMiniProgramOrder") return await refundMiniProgramOrder(payload);
+    if (action === "confirmRefundResult") return await confirmRefundResult(payload);
     if (action === "migrateSingleStoreData") return await migrateSingleStoreData(payload);
     if (action === "initializeProduction") return await initializeProduction(payload);
 
@@ -97,13 +99,18 @@ async function processOrderRefund(payload = {}, staffId = null, loadedOrder = nu
   if (!reason) return fail("请填写退款原因。");
 
   const now = new Date().toISOString();
-  const refundId = createId("refund");
   let method = order.paymentMethod === "member_balance" ? "member_balance" : "cash";
-  let paymentRefund = null;
+  const cumulativeCents = Math.round((Number(order.refundAmount || 0) + amount) * 100);
+  const outRefundNo = `RF${order.orderNo}${cumulativeCents}`.slice(0, 64);
+  const refundId = refundDocumentId(outRefundNo);
+  const existingRefund = await getDoc(COLLECTIONS.refunds, refundId);
+  if (existingRefund) {
+    return ok({ order, refund: existingRefund, member: null, duplicated: true });
+  }
   if (order.paymentMethod === "wechat_pay") {
     method = "wechat_pay";
-    const cumulativeCents = Math.round((Number(order.refundAmount || 0) + amount) * 100);
-    const outRefundNo = `RF${order.orderNo}${cumulativeCents}`.slice(0, 64);
+    const locked = await createPendingRefund({ order, refundId, outRefundNo, amount, reason, method, staffId, now });
+    if (locked.duplicated) return ok({ order, refund: locked.refund, member: null, duplicated: true });
     const result = await cloud.callFunction({
       name: process.env.PAYMENT_FUNCTION || "partnerPay",
       data: {
@@ -120,63 +127,105 @@ async function processOrderRefund(payload = {}, staffId = null, loadedOrder = nu
         },
       },
     });
-    if (!result.result?.ok) return fail(result.result?.message || "微信支付退款申请失败，订单未做退款处理。");
-    paymentRefund = result.result;
+    if (!result.result?.ok) {
+      await markRefundFailed(refundId, result.result?.message || "微信支付退款申请失败");
+      return fail(result.result?.message || "微信支付退款申请失败，订单未做退款处理。");
+    }
+    if (result.result.status === "SUCCESS") {
+      return await finalizeRefundSuccess({
+        refundId,
+        outRefundNo,
+        paymentRefundId: result.result.refundId || "",
+        refundInCents: Math.round(amount * 100),
+      });
+    }
+    const processingRefund = await getDoc(COLLECTIONS.refunds, refundId);
+    return ok({ order, refund: processingRefund, member: null });
   }
+  await createPendingRefund({ order, refundId, outRefundNo, amount, reason, method, staffId, now });
+  return await finalizeRefundSuccess({ refundId, outRefundNo, refundInCents: Math.round(amount * 100) });
+}
 
-  let member = order.memberId ? await getDoc(COLLECTIONS.members, order.memberId) : null;
-  if (method === "member_balance" && member) {
-    const balance = Number((Number(member.balance || 0) + amount).toFixed(2));
-    member = { ...member, balance, updatedAt: now };
-    await upsert(COLLECTIONS.members, member.id, member);
-    const recordId = createId("record");
-    await upsert(COLLECTIONS.transactions, recordId, {
-      id: recordId,
-      memberId: member.id,
-      memberName: member.name,
-      memberPhone: member.phone,
-      memberCard: member.card,
-      storeId: order.storeId,
-      staffId,
-      type: "refund",
-      amount,
-      bonusAmount: 0,
-      balanceAfter: balance,
-      orderId: order.id,
-      orderNo: order.orderNo,
-      paymentMethod: method,
-      note: `订单 ${order.orderNo} 退款：${reason}`,
-      createdAt: now,
+async function createPendingRefund({ order, refundId, outRefundNo, amount, reason, method, staffId, now }) {
+  return db.runTransaction(async (transaction) => {
+    const existing = await txGet(transaction, COLLECTIONS.refunds, refundId);
+    if (existing) return { duplicated: true, refund: existing };
+    const currentOrder = await txGet(transaction, COLLECTIONS.orders, order.id);
+    if (!currentOrder || currentOrder.paymentStatus !== "paid" || currentOrder.status !== "pending") {
+      throw new Error("订单状态已变化，请刷新后重试退款。");
+    }
+    const remaining = Number((Number(currentOrder.totalAmount || 0) - Number(currentOrder.refundAmount || 0)).toFixed(2));
+    if (amount > remaining) throw new Error("退款金额超过订单剩余可退金额。");
+    const refund = {
+      id: refundId, storeId: currentOrder.storeId, orderId: currentOrder.id,
+      memberId: currentOrder.memberId || "", amount, reason, method,
+      status: "processing", paymentRefundId: "", outRefundNo, staffId,
+      createdAt: now, updatedAt: now,
+    };
+    await txSet(transaction, COLLECTIONS.refunds, refundId, refund);
+    return { duplicated: false, refund };
+  });
+}
+
+async function confirmRefundResult(payload = {}) {
+  if (!isTrustedPaymentConfirmation(payload)) return fail("退款确认来源无效。");
+  const status = String(payload.status || "").toUpperCase();
+  const refundId = refundDocumentId(String(payload.outRefundNo || payload.out_refund_no || ""));
+  if (status === "SUCCESS") {
+    return finalizeRefundSuccess({
+      refundId,
+      outRefundNo: payload.outRefundNo || payload.out_refund_no,
+      paymentRefundId: payload.paymentRefundId || payload.refund_id || "",
+      refundInCents: Number(payload.refundInCents),
     });
   }
-
-  const refund = {
-    id: refundId,
-    storeId: order.storeId,
-    orderId: order.id,
-    memberId: order.memberId || "",
-    amount,
-    reason,
-    method,
-    status: paymentRefund?.status === "SUCCESS" ? "completed" : (paymentRefund ? "processing" : "completed"),
-    paymentRefundId: paymentRefund?.refundId || "",
-    outRefundNo: paymentRefund?.outRefundNo || "",
-    staffId,
-    createdAt: now,
-  };
-  await upsert(COLLECTIONS.refunds, refund.id, refund);
-  const refundAmount = Number((Number(order.refundAmount || 0) + amount).toFixed(2));
-  const updatedOrder = {
-    ...order,
-    refundAmount,
-    refundReason: reason,
-    refundMethod: method,
-    status: refundAmount >= Number(order.totalAmount || 0) ? "refunded" : "partial_refund",
-    updatedAt: now,
-  };
-  await upsert(COLLECTIONS.orders, updatedOrder.id, updatedOrder);
-  return ok({ order: updatedOrder, refund, member });
+  await markRefundFailed(refundId, payload.failureReason || status || "退款失败");
+  return ok({ refund: await getDoc(COLLECTIONS.refunds, refundId) });
 }
+
+async function finalizeRefundSuccess({ refundId, outRefundNo, paymentRefundId = "", refundInCents }) {
+  return db.runTransaction(async (transaction) => {
+    const refund = await txGet(transaction, COLLECTIONS.refunds, refundId);
+    if (!refund) throw new Error("未找到退款申请。");
+    const order = await txGet(transaction, COLLECTIONS.orders, refund.orderId);
+    if (!order) throw new Error("未找到退款对应订单。");
+    if (refund.status === "completed") return ok({ order, refund, member: null, duplicated: true });
+    const expectedCents = Math.round(Number(refund.amount || 0) * 100);
+    if (Number.isInteger(refundInCents) && refundInCents !== expectedCents) throw new Error("微信退款金额与申请金额不一致。");
+    const refundAmount = Number((Number(order.refundAmount || 0) + Number(refund.amount || 0)).toFixed(2));
+    if (refundAmount > Number(order.totalAmount || 0)) throw new Error("累计退款金额超过订单实付金额。");
+    let member = null;
+    if (refund.method === "member_balance" && order.memberId) {
+      member = await txGet(transaction, COLLECTIONS.members, order.memberId);
+      if (!member) throw new Error("未找到退款会员。");
+      member = { ...member, balance: Number((Number(member.balance || 0) + Number(refund.amount)).toFixed(2)), updatedAt: new Date().toISOString() };
+      await txSet(transaction, COLLECTIONS.members, member.id, member);
+      const recordId = `refund_record_${hashId(outRefundNo)}`;
+      await txSet(transaction, COLLECTIONS.transactions, recordId, {
+        id: recordId, memberId: member.id, memberName: member.name, memberPhone: member.phone,
+        memberCard: member.card, storeId: order.storeId, staffId: refund.staffId,
+        type: "refund", amount: refund.amount, bonusAmount: 0, balanceAfter: member.balance,
+        orderId: order.id, orderNo: order.orderNo, paymentMethod: refund.method,
+        note: `订单 ${order.orderNo} 退款：${refund.reason}`, createdAt: new Date().toISOString(),
+      });
+    }
+    const completed = { ...refund, status: "completed", paymentRefundId, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const updatedOrder = { ...order, refundAmount, refundReason: refund.reason, refundMethod: refund.method,
+      status: refundAmount >= Number(order.totalAmount || 0) ? "refunded" : "partial_refund", updatedAt: new Date().toISOString() };
+    await txSet(transaction, COLLECTIONS.refunds, refundId, completed);
+    await txSet(transaction, COLLECTIONS.orders, order.id, updatedOrder);
+    return ok({ order: updatedOrder, refund: completed, member });
+  });
+}
+
+async function markRefundFailed(refundId, reason) {
+  const refund = await getDoc(COLLECTIONS.refunds, refundId);
+  if (!refund || refund.status === "completed") return;
+  await upsert(COLLECTIONS.refunds, refundId, { ...refund, status: "failed", failureReason: String(reason || "退款失败").slice(0, 200), updatedAt: new Date().toISOString() });
+}
+
+function refundDocumentId(outRefundNo) { return `refund_${hashId(outRefundNo)}`; }
+function hashId(value) { return crypto.createHash("sha256").update(String(value || "")).digest("hex").slice(0, 32); }
 
 function requiredInternalPaymentSecret() {
   const secret = String(process.env.INTERNAL_PAYMENT_SECRET || "").trim();
@@ -219,6 +268,19 @@ async function getStoreData(payload = {}) {
       },
       session: null,
     },
+  });
+}
+
+async function getAdminOrderUpdates(payload = {}) {
+  const adminSession = await requireAdminSession(payload.sessionToken);
+  if (!adminSession.ok) return adminSession;
+  const result = await db.collection(COLLECTIONS.orders)
+    .where({ storeId: adminSession.staffer?.storeId || adminSession.session?.storeId || DEFAULT_STORE_ID })
+    .limit(1000)
+    .get();
+  return ok({
+    orders: (result.data || []).map(removeCloudId),
+    checkedAt: new Date().toISOString(),
   });
 }
 
@@ -282,7 +344,7 @@ async function getMiniProgramData(payload = {}) {
   const storeId = await resolveStoreId(payload.storeId);
   const openid = getOpenid(payload);
   const profile = openid ? await getCustomerProfile(openid) : null;
-  const phone = normalizePhone(profile?.phone || payload.phone);
+  const phone = normalizePhone(profile?.phone);
   const [store, rawProducts, categories, member, deliverySettings] = await Promise.all([
     getDoc(COLLECTIONS.stores, storeId),
     getProductsByStore(storeId),
@@ -469,31 +531,31 @@ async function confirmPaidMiniProgramRecharge(payload = {}) {
 
   const member = await getDoc(COLLECTIONS.members, memberId);
   if (!member) return fail("未找到充值对应的会员。");
-
-  const existing = await findRechargeRecord(rechargeNo);
-  if (existing) {
+  const legacyRecord = await findRechargeRecord(rechargeNo);
+  if (legacyRecord) {
     await completePendingRecharge(rechargeNo, payload.paymentTradeNo || "");
-    return ok({ member, record: existing, duplicated: true });
+    return ok({ member, record: legacyRecord, duplicated: true });
   }
-
-  const storeId = member.storeId || DEFAULT_STORE_ID;
-  const bonusAmount = await getRechargeBonus(amount, storeId);
-  const balanceAfter = Number((Number(member.balance || 0) + amount + bonusAmount).toFixed(2));
-  const updatedMember = {
-    ...member,
-    balance: balanceAfter,
-    updatedAt: new Date().toISOString(),
-  };
-  await upsert(COLLECTIONS.members, member.id, updatedMember);
-
-  const recordId = createId("record");
-  const record = {
+  const payerProfile = await getCustomerProfile(openid);
+  const ownsMember = String(member.openid || "") === openid
+    || (payerProfile?.phone && normalizePhone(payerProfile.phone) === normalizePhone(member.phone));
+  if (!ownsMember) return fail("充值会员与当前微信身份不一致，请重新授权手机号。");
+  const bonusAmount = await getRechargeBonus(amount, member.storeId || DEFAULT_STORE_ID);
+  const recordId = `recharge_record_${hashId(rechargeNo)}`;
+  return db.runTransaction(async (transaction) => {
+    const currentMember = await txGet(transaction, COLLECTIONS.members, memberId);
+    if (!currentMember) throw new Error("未找到充值对应的会员。");
+    const existing = await txGet(transaction, COLLECTIONS.transactions, recordId);
+    if (existing) return ok({ member: currentMember, record: existing, duplicated: true });
+    const balanceAfter = Number((Number(currentMember.balance || 0) + amount + bonusAmount).toFixed(2));
+    const updatedMember = { ...currentMember, balance: balanceAfter, updatedAt: new Date().toISOString() };
+    const record = {
     id: recordId,
-    memberId: member.id,
-    memberName: member.name || "微信顾客",
-    memberPhone: member.phone || "",
-    memberCard: member.card || "",
-    storeId: member.storeId || DEFAULT_STORE_ID,
+    memberId: currentMember.id,
+    memberName: currentMember.name || "微信顾客",
+    memberPhone: currentMember.phone || "",
+    memberCard: currentMember.card || "",
+    storeId: currentMember.storeId || DEFAULT_STORE_ID,
     staffId: null,
     type: "recharge",
     amount,
@@ -504,17 +566,24 @@ async function confirmPaidMiniProgramRecharge(payload = {}) {
     paymentMethod: "wechat_pay",
     paymentTradeNo: String(payload.paymentTradeNo || ""),
     payerOpenid: openid,
-    payerMatchedMember: !member.openid || String(member.openid) === openid,
+    payerMatchedMember: !currentMember.openid || String(currentMember.openid) === openid,
     itemsText: "",
     note: bonusAmount > 0
       ? `小程序会员充值 ${rechargeNo}，赠送 ${bonusAmount.toFixed(2)} 元`
       : `小程序会员充值 ${rechargeNo}`,
     createdAt: new Date().toISOString(),
-  };
-  await upsert(COLLECTIONS.transactions, recordId, record);
-  await completePendingRecharge(rechargeNo, payload.paymentTradeNo || "");
-
-  return ok({ member: updatedMember, record });
+    };
+    await txSet(transaction, COLLECTIONS.members, currentMember.id, updatedMember);
+    await txSet(transaction, COLLECTIONS.transactions, recordId, record);
+    const pendingId = `pending_recharge_${hashId(rechargeNo).slice(0, 24)}`;
+    const pending = await txGet(transaction, COLLECTIONS.transactions, pendingId);
+    if (pending) await txSet(transaction, COLLECTIONS.transactions, pendingId, {
+      ...pending, status: "completed", paymentStatus: "paid",
+      paymentTradeNo: String(payload.paymentTradeNo || pending.paymentTradeNo || ""),
+      completedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    return ok({ member: updatedMember, record });
+  });
 }
 
 async function registerPendingMiniProgramRecharge(payload = {}) {
@@ -529,6 +598,10 @@ async function registerPendingMiniProgramRecharge(payload = {}) {
   }
   const member = await getDoc(COLLECTIONS.members, memberId);
   if (!member) return fail("未找到充值对应的会员。");
+  const payerProfile = await getCustomerProfile(payerOpenid);
+  const ownsMember = String(member.openid || "") === payerOpenid
+    || (payerProfile?.phone && normalizePhone(payerProfile.phone) === normalizePhone(member.phone));
+  if (!ownsMember) return fail("充值会员与当前微信身份不一致，请重新授权手机号。");
   const existing = await findPendingRechargeRecord(rechargeNo);
   if (existing) return ok({ pending: existing, duplicated: true });
   const now = new Date().toISOString();
@@ -595,7 +668,9 @@ async function getRechargeBonus(amount, storeId = DEFAULT_STORE_ID) {
 
 async function getMiniProgramOrders(payload = {}) {
   const openid = getOpenid(payload);
-  const phone = normalizePhone(payload.phone);
+  if (!openid) return fail("未取得微信身份，请重新进入小程序。");
+  const profile = await getCustomerProfile(openid);
+  const phone = normalizePhone(profile?.phone);
   const storeId = await resolveStoreId(payload.storeId);
   const orders = await getOrdersForCustomer({ openid, phone, storeId });
   return ok({ orders });
@@ -617,34 +692,26 @@ async function createMiniProgramOrder(payload = {}) {
   });
   if (!draft.ok) return draft;
 
-  const member = await getDoc(COLLECTIONS.members, draft.order.memberId);
-  if (!member) return fail("请先授权手机号并加入会员后再使用余额支付。");
-  if (Number(member.balance || 0) < draft.order.totalAmount) {
-    return fail(`会员余额不足，当前余额 ${Number(member.balance || 0).toFixed(2)}。`);
-  }
-
-  const balanceAfter = Number((Number(member.balance || 0) - draft.order.totalAmount).toFixed(2));
-  await upsert(COLLECTIONS.members, member.id, {
-    ...member,
-    balance: balanceAfter,
-    updatedAt: new Date().toISOString(),
+  const recordId = `balance_payment_${hashId(draft.order.orderNo)}`;
+  return db.runTransaction(async (transaction) => {
+    const existingOrder = await txGet(transaction, COLLECTIONS.orders, draft.order.id);
+    if (existingOrder?.paymentStatus === "paid") return ok({ order: existingOrder, duplicated: true });
+    const member = await txGet(transaction, COLLECTIONS.members, draft.order.memberId);
+    if (!member) throw new Error("请先授权手机号并加入会员后再使用余额支付。");
+    if (Number(member.balance || 0) < draft.order.totalAmount) {
+      throw new Error(`会员余额不足，当前余额 ${Number(member.balance || 0).toFixed(2)}。`);
+    }
+    const balanceAfter = Number((Number(member.balance || 0) - draft.order.totalAmount).toFixed(2));
+    const updatedMember = { ...member, balance: balanceAfter, updatedAt: new Date().toISOString() };
+    const paidOrder = { ...draft.order, paidAmount: draft.order.totalAmount, paymentTradeNo: `BALANCE-${draft.order.orderNo}` };
+    await txSet(transaction, COLLECTIONS.members, member.id, updatedMember);
+    await txSet(transaction, COLLECTIONS.transactions, recordId, buildOrderPaymentRecord({
+      id: recordId, order: paidOrder, member: updatedMember, type: "spend",
+      note: `订单 ${draft.order.orderNo} 会员余额支付`,
+    }));
+    await txSet(transaction, COLLECTIONS.orders, paidOrder.id, paidOrder);
+    return ok({ order: paidOrder });
   });
-  const recordId = createId("record");
-  await upsert(COLLECTIONS.transactions, recordId, buildOrderPaymentRecord({
-    id: recordId,
-    order: draft.order,
-    member: { ...member, balance: balanceAfter },
-    type: "spend",
-    note: `订单 ${draft.order.orderNo} 会员余额支付`,
-  }));
-  const paidOrder = {
-    ...draft.order,
-    paidAmount: draft.order.totalAmount,
-    paymentTradeNo: `BALANCE-${draft.order.orderNo}`,
-  };
-  await upsert(COLLECTIONS.orders, paidOrder.id, paidOrder);
-
-  return ok({ order: paidOrder });
 }
 
 async function createMiniProgramPendingOrder(payload = {}) {
@@ -733,8 +800,10 @@ async function buildMiniProgramOrderDraft(payload = {}, payment = {}) {
   await ensureDefaultStore();
   const storeId = await resolveStoreId(payload.storeId);
   const openid = getOpenid(payload);
+  if (!openid) return fail("未取得微信身份，请重新进入小程序。");
+  const profile = await getCustomerProfile(openid);
   const customer = payload.customer || {};
-  const phone = normalizePhone(customer.phone || payload.phone);
+  const phone = normalizePhone(profile?.phone);
   const name = String(customer.name || payload.customerName || "微信顾客").trim() || "微信顾客";
   const items = await normalizeOrderItems(payload.items || [], storeId);
   if (!items.length) return fail("请先选择商品。");
@@ -1580,34 +1649,36 @@ async function findOrderByOrderNo(orderNo) {
 }
 
 async function markMiniProgramOrderPaid(order, payment = {}) {
-  if (order.paymentStatus === "paid") return order;
-
-  const member = order.memberId ? await getDoc(COLLECTIONS.members, order.memberId) : null;
-  const paidOrder = {
-    ...order,
-    status: "pending",
-    paymentStatus: "paid",
-    paymentMethod: payment.paymentMethod || order.paymentMethod || "wechat_pay",
-    paymentTradeNo: payment.paymentTradeNo || order.paymentTradeNo || "",
-    paidAmount: Number(order.totalAmount || 0),
-    paymentCallbackAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  await upsert(COLLECTIONS.orders, paidOrder.id, paidOrder);
-
-  const existingRecord = await findOrderPaymentRecord(paidOrder.orderNo);
-  if (!existingRecord) {
-    const recordId = createId("record");
-    await upsert(COLLECTIONS.transactions, recordId, buildOrderPaymentRecord({
-      id: recordId,
-      order: paidOrder,
-      member,
-      type: "order_payment",
-      note: `订单 ${paidOrder.orderNo} ${paymentMethodLabel(paidOrder.paymentMethod)}`,
-    }));
+  if (order.paymentStatus === "paid") {
+    const legacyRecord = await findOrderPaymentRecord(order.orderNo);
+    if (legacyRecord) return order;
   }
-
-  return paidOrder;
+  const recordId = `order_payment_${hashId(order.orderNo)}`;
+  return db.runTransaction(async (transaction) => {
+    const storedOrder = await txGet(transaction, COLLECTIONS.orders, order.id);
+    const currentOrder = storedOrder || order;
+    const existingRecord = await txGet(transaction, COLLECTIONS.transactions, recordId);
+    if (currentOrder.paymentStatus === "paid" && existingRecord) return currentOrder;
+    const member = currentOrder.memberId ? await txGet(transaction, COLLECTIONS.members, currentOrder.memberId) : null;
+    const paidOrder = {
+      ...currentOrder,
+      status: "pending",
+      paymentStatus: "paid",
+      paymentMethod: payment.paymentMethod || currentOrder.paymentMethod || "wechat_pay",
+      paymentTradeNo: payment.paymentTradeNo || currentOrder.paymentTradeNo || "",
+      paidAmount: Number(currentOrder.totalAmount || 0),
+      paymentCallbackAt: currentOrder.paymentCallbackAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await txSet(transaction, COLLECTIONS.orders, paidOrder.id, paidOrder);
+    if (!existingRecord) {
+      await txSet(transaction, COLLECTIONS.transactions, recordId, buildOrderPaymentRecord({
+        id: recordId, order: paidOrder, member, type: "order_payment",
+        note: `订单 ${paidOrder.orderNo} ${paymentMethodLabel(paidOrder.paymentMethod)}`,
+      }));
+    }
+    return paidOrder;
+  });
 }
 
 async function findOrderPaymentRecord(orderNo) {
@@ -1811,7 +1882,24 @@ function createOrderNo() {
 
 function getOpenid(payload = {}) {
   const wxContext = cloud.getWXContext ? cloud.getWXContext() : {};
-  return payload.openid || wxContext.OPENID || "";
+  return wxContext.OPENID || "";
+}
+
+async function txGet(transaction, collectionName, id) {
+  try {
+    const result = await transaction.collection(collectionName).doc(id).get();
+    const data = Array.isArray(result?.data) ? result.data[0] : result?.data;
+    return data ? removeCloudId(data) : null;
+  } catch (error) {
+    const message = String(error?.message || error?.errMsg || "");
+    if (message.includes("not exist") || message.includes("not found") || message.includes("DOCUMENT_NOT_FOUND")) return null;
+    throw error;
+  }
+}
+
+async function txSet(transaction, collectionName, id, value) {
+  const { _id, ...documentData } = value;
+  await transaction.collection(collectionName).doc(id).set({ data: documentData });
 }
 
 async function getAll(collectionName) {
