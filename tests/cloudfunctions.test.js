@@ -194,6 +194,23 @@ function baseSeed() {
   };
 }
 
+test("admin incremental order refresh returns store orders", async () => {
+  const seed = baseSeed();
+  const sessionToken = "a".repeat(64);
+  seed.admin_sessions = [{
+    _id: sessionToken, id: sessionToken, staffId: "staff_aiwa_manager",
+    storeId: "store_aiwa_pizza_main", expiresAt: Date.now() + 3600000,
+  }];
+  seed.orders.push({
+    _id: "incremental-order-1", id: "incremental-order-1", orderNo: "INCREMENTAL-1",
+    storeId: "store_aiwa_pizza_main", status: "pending", createdAt: new Date().toISOString(),
+  });
+  const { main } = loadMembershipApi(seed);
+  const result = await main({ action: "getAdminOrderUpdates", payload: { sessionToken } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(result.orders, (order) => order.orderNo), ["INCREMENTAL-1"]);
+});
+
 test("membership balance order deducts balance and records a paid order", async () => {
   const { main, database } = loadMembershipApi(baseSeed());
   const result = await main({
